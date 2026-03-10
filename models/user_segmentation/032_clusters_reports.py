@@ -1667,8 +1667,140 @@ def get_html_cluster_detailed_information(analysis: str):
         )
         return top.toPandas()
 
+    def _top_games_revenue_pdf(events_df, days, top_n):
+        wagers_by_user_game = (
+            events_df
+            .groupBy("cluster_id", "user_id", "source_system", "game_name")
+            .agg(F.sum(F.coalesce(F.col("wager_amount"), F.lit(0.0))).alias("wager_amount_sum"))
+        )
+
+        wagers_total_by_user = (
+            _filter_last_days(settled_wager, days=days, ts_col="wager_settlement_timestamp").alias("f")
+            .join(
+                dim_game.select("game_sk", "source_system", "game_category_id").alias("g"),
+                (F.col("f.game_sk") == F.col("g.game_sk")) & (F.col("f.source_system") == F.col("g.source_system")),
+                "inner"
+            )
+            .drop(F.col("g.game_sk"), F.col("g.source_system"))
+            .join(
+                user.select("user_sk", "source_system", "user_id", "is_test_user").alias("u"),
+                (F.col("f.user_sk") == F.col("u.user_sk")) & (F.col("f.source_system") == F.col("u.source_system")),
+                "inner"
+            )
+            .drop(F.col("u.user_sk"), F.col("u.source_system"))
+            .filter(F.upper(F.col("source_system")) != F.lit("LOTTERY"))
+            .filter(F.col("is_test_user") == F.lit(False))
+            .filter(CAT_ALLOCATION_FILTER)
+            .groupBy(F.col("user_id").cast("string").alias("user_id"), F.col("source_system"))
+            .agg(F.sum(F.coalesce(F.col("wager_amount").cast("double"), F.lit(0.0))).alias("wager_amount_total_window"))
+        )
+
+        deposits_by_user = (
+            _filter_last_days(deposit, days=days).alias("d")
+            .join(
+                user.select("user_sk", "source_system", "user_id", "is_test_user").alias("u"),
+                (F.col("d.user_sk") == F.col("u.user_sk")) & (F.col("d.source_system") == F.col("u.source_system")),
+                "inner"
+            )
+            .drop(F.col("u.user_sk"), F.col("u.source_system"))
+            .filter(F.upper(F.col("source_system")) != F.lit("LOTTERY"))
+            .filter(F.col("is_test_user") == F.lit(False))
+            .groupBy(F.col("user_id").cast("string").alias("user_id"), F.col("source_system"))
+            .agg(F.sum(F.coalesce(F.col("vat_on_deposit_amount").cast("double"), F.lit(0.0))).alias("vat_amount_window"))
+        )
+
+        rtp_by_user_game = (
+            _filter_last_days(rtp, days=days, ts_col="rtp_timestamp").alias("r")
+            .join(
+                dim_game.select("game_sk", "source_system", "game_category_id", "game_name").alias("g"),
+                (F.col("r.game_sk") == F.col("g.game_sk")) & (F.col("r.source_system") == F.col("g.source_system")),
+                "inner"
+            )
+            .drop(F.col("g.game_sk"), F.col("g.source_system"))
+            .join(
+                user.select("user_sk", "source_system", "user_id", "is_test_user").alias("u"),
+                (F.col("r.user_sk") == F.col("u.user_sk")) & (F.col("r.source_system") == F.col("u.source_system")),
+                "inner"
+            )
+            .drop(F.col("u.user_sk"), F.col("u.source_system"))
+            .filter(F.upper(F.col("source_system")) != F.lit("LOTTERY"))
+            .filter(F.col("is_test_user") == F.lit(False))
+            .filter(CAT_ANALYSIS_FILTER)
+            .withColumn(
+                "game_name",
+                F.when(
+                    F.col("game_name").isNull() | (F.length(F.trim(F.col("game_name"))) == 0),
+                    F.lit("Unknown")
+                ).otherwise(F.col("game_name"))
+            )
+            .groupBy(
+                F.col("user_id").cast("string").alias("user_id"),
+                F.col("source_system"),
+                F.col("game_name")
+            )
+            .agg(F.sum(F.coalesce(F.col(rtp_col).cast("double"), F.lit(0.0))).alias("rtp_amount_sum"))
+        )
+
+        revenue_by_game = (
+            wagers_by_user_game.alias("w")
+            .join(
+                rtp_by_user_game.alias("r"),
+                (F.col("w.user_id") == F.col("r.user_id")) &
+                (F.col("w.source_system") == F.col("r.source_system")) &
+                (F.col("w.game_name") == F.col("r.game_name")),
+                "left"
+            )
+            .join(
+                deposits_by_user.alias("d"),
+                (F.col("w.user_id") == F.col("d.user_id")) &
+                (F.col("w.source_system") == F.col("d.source_system")),
+                "left"
+            )
+            .join(
+                wagers_total_by_user.alias("t"),
+                (F.col("w.user_id") == F.col("t.user_id")) &
+                (F.col("w.source_system") == F.col("t.source_system")),
+                "left"
+            )
+            .select(
+                F.col("w.cluster_id").alias("cluster_id"),
+                F.col("w.game_name").alias("game_name"),
+                F.coalesce(F.col("w.wager_amount_sum"), F.lit(0.0)).alias("wager_amount_sum"),
+                F.coalesce(F.col("r.rtp_amount_sum"), F.lit(0.0)).alias("rtp_amount_sum"),
+                F.coalesce(F.col("d.vat_amount_window"), F.lit(0.0)).alias("vat_amount_window"),
+                F.coalesce(F.col("t.wager_amount_total_window"), F.lit(0.0)).alias("wager_amount_total_window")
+            )
+            .withColumn(
+                "vat_allocated",
+                F.when(
+                    F.col("wager_amount_total_window") > F.lit(0.0),
+                    F.col("vat_amount_window") * (F.col("wager_amount_sum") / F.col("wager_amount_total_window"))
+                ).otherwise(F.lit(0.0))
+            )
+            .withColumn(
+                "revenue_game",
+                F.col("wager_amount_sum") - F.col("rtp_amount_sum") - F.col("vat_allocated")
+            )
+            .groupBy("cluster_id", "game_name")
+            .agg(F.sum(F.col("revenue_game")).alias("revenue_sum"))
+        )
+
+        w = Window.partitionBy("cluster_id").orderBy(
+            F.col("revenue_sum").desc(),
+            F.col("game_name").asc()
+        )
+        top = (
+            revenue_by_game
+            .withColumn("rn", F.row_number().over(w))
+            .filter(F.col("rn") <= F.lit(int(top_n)))
+            .drop("rn")
+        )
+        return top.toPandas()
+
     top_games_365_pdf = _top_games_pdf(events_365, TOP_GAMES_N)
     top_games_90_pdf  = _top_games_pdf(events_90,  TOP_GAMES_N)
+    top_games_revenue_365_pdf = _top_games_revenue_pdf(events_365, DAYS_ALL, TOP_GAMES_N)
+    top_games_revenue_90_pdf  = _top_games_revenue_pdf(events_90, DAYS_RECENT, TOP_GAMES_N)
 
     # ======================================================
     # AGE + NATIONALITY (same as before)
@@ -1819,14 +1951,14 @@ def get_html_cluster_detailed_information(analysis: str):
         df = df.sort_values("cnt", ascending=False)
         return df["nationality_bucket"].astype(str).tolist(), df["cnt"].tolist()
 
-    def _top_games_series_for_cluster(cid, top_games_pdf):
+    def _top_games_series_for_cluster(cid, top_games_pdf, metric_col):
         df = top_games_pdf[top_games_pdf["cluster_id"] == cid]
         if df.empty:
             return [], []
         df = df.copy()
-        df["wager_amount_sum"] = pd.to_numeric(df["wager_amount_sum"], errors="coerce").fillna(0).astype(int)
-        df = df.sort_values(["wager_amount_sum", "game_name"], ascending=[False, True])
-        return df["game_name"].astype(str).tolist(), df["wager_amount_sum"].tolist()
+        df[metric_col] = pd.to_numeric(df[metric_col], errors="coerce").fillna(0.0)
+        df = df.sort_values([metric_col, "game_name"], ascending=[False, True])
+        return df["game_name"].astype(str).tolist(), df[metric_col].tolist()
 
     def _fmt_money(x):
         try:
@@ -1849,7 +1981,12 @@ def get_html_cluster_detailed_information(analysis: str):
     # ======================================================
     # Global bar chart (X=cluster name, Y=total_revenue)
     # ======================================================
-    bar_pdf = cluster_metrics_df.select("cluster_id", "total_revenue_cat1", "cluster_name").toPandas()
+    # Reuse the already materialized cluster snapshot to keep overview and cards consistent.
+    bar_pdf = (
+        cluster_metrics_pdf
+        .reset_index()[["cluster_id", "total_revenue_cat1", "cluster_name"]]
+        .copy()
+    )
     bar_pdf["cluster_name"] = bar_pdf["cluster_name"].fillna("").replace("", np.nan)
     bar_pdf["cluster_name"] = bar_pdf["cluster_name"].fillna(bar_pdf["cluster_id"])
     bar_pdf["total_revenue_cat1"] = pd.to_numeric(bar_pdf["total_revenue_cat1"], errors="coerce").fillna(0.0)
@@ -1899,12 +2036,14 @@ def get_html_cluster_detailed_information(analysis: str):
         # LEFT: 365d
         hx_365, hy_365 = _hour_series_for_cluster(cid, hourly_365_pdf)
         dx_365, dy_365 = _dow_series_for_cluster(cid, weekday_365_pdf)
-        gx_365, gy_365 = _top_games_series_for_cluster(cid, top_games_365_pdf)
+        gx_365, gy_365 = _top_games_series_for_cluster(cid, top_games_365_pdf, "wager_amount_sum")
+        grx_365, gry_365 = _top_games_series_for_cluster(cid, top_games_revenue_365_pdf, "revenue_sum")
 
         # RIGHT: 90d
         hx_90, hy_90 = _hour_series_for_cluster(cid, hourly_90_pdf)
         dx_90, dy_90 = _dow_series_for_cluster(cid, weekday_90_pdf)
-        gx_90,  gy_90  = _top_games_series_for_cluster(cid, top_games_90_pdf)
+        gx_90,  gy_90  = _top_games_series_for_cluster(cid, top_games_90_pdf, "wager_amount_sum")
+        grx_90, gry_90 = _top_games_series_for_cluster(cid, top_games_revenue_90_pdf, "revenue_sum")
 
         fig_hour_365 = _plotly_bar(hx_365, hy_365, "Daily activity (by hour)")
         fig_dow_365  = _plotly_bar(dx_365, dy_365, "Weekly activity (by day)")
@@ -1928,6 +2067,24 @@ def get_html_cluster_detailed_information(analysis: str):
         else:
             games_90_html = ""
             games_90_note = '<div class="muted" style="margin-top:8px;">No game data for this cluster (90d).</div>'
+
+        if len(grx_365) > 0:
+            fig_games_rev_365 = _plotly_bar(grx_365, gry_365, "Top games (revenue)", height=260)
+            fig_games_rev_365.update_layout(xaxis=dict(tickangle=-25))
+            games_rev_365_html = pio.to_html(fig_games_rev_365, include_plotlyjs=False, full_html=False, config={"displayModeBar": False})
+            games_rev_365_note = ""
+        else:
+            games_rev_365_html = ""
+            games_rev_365_note = '<div class="muted" style="margin-top:8px;">No revenue game data for this cluster (365d).</div>'
+
+        if len(grx_90) > 0:
+            fig_games_rev_90 = _plotly_bar(grx_90, gry_90, "Top games (revenue)", height=260)
+            fig_games_rev_90.update_layout(xaxis=dict(tickangle=-25))
+            games_rev_90_html = pio.to_html(fig_games_rev_90, include_plotlyjs=False, full_html=False, config={"displayModeBar": False})
+            games_rev_90_note = ""
+        else:
+            games_rev_90_html = ""
+            games_rev_90_note = '<div class="muted" style="margin-top:8px;">No revenue game data for this cluster (90d).</div>'
 
         hour_365_html = pio.to_html(fig_hour_365, include_plotlyjs=False, full_html=False, config={"displayModeBar": False})
         dow_365_html  = pio.to_html(fig_dow_365,  include_plotlyjs=False, full_html=False, config={"displayModeBar": False})
@@ -2024,6 +2181,22 @@ def get_html_cluster_detailed_information(analysis: str):
                     <div class="section-title">Top games — last 90 days</div>
                     <div class="plots onecol">
                     <div class="plot">{games_90_html}{games_90_note}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="activity-two">
+                <div class="activity-col">
+                    <div class="section-title">Top games by revenue — last 365 days</div>
+                    <div class="plots onecol">
+                    <div class="plot">{games_rev_365_html}{games_rev_365_note}</div>
+                    </div>
+                </div>
+
+                <div class="activity-col">
+                    <div class="section-title">Top games by revenue — last 90 days</div>
+                    <div class="plots onecol">
+                    <div class="plot">{games_rev_90_html}{games_rev_90_note}</div>
                     </div>
                 </div>
             </div>
