@@ -76,7 +76,17 @@ CURRENT_DATE = F.current_date()
 #                    "analysis_3": "sports",
 #                    "analysis_4": "lottery" }
 # ANALYSIS_NAMES = {"analysis_5":"online_live_casino"}
-ANALYSIS_NAMES = {"analysis_6":"online_live_casino_ap2"}
+ANALYSIS_NAMES = {
+    "analysis_1": "online_casino",
+    "analysis_2": "live_casino",
+    "analysis_3": "sports",
+    "analysis_4": "ols"
+}
+# ANALYSIS_NAMES = {
+#     "analysis_6":"online_live_casino_ap2"
+# }
+    
+
 
 
 # COMMAND ----------
@@ -87,11 +97,8 @@ DAYS_RECENT = 90
 
 ONLINE_CASINO_CATEGORY_IDS = [1, 99]
 LIVE_CASINO_CATEGORY_IDS = [3, 99]
+SPORTS_CATEGORY_IDS = [6, 99]
 GAME_CATS_ALLOCATION = [1, 3, 6]
-
-
-# ONLINE_CASINO_CATEGORY_IDS = [1, 99]
-# LIVE_CASINO_CATEGORY_IDS   = [3, 99]
 
 # Combined scope = Online Casino + Live Casino (excluding Lottery)
 # ONLINE_FILTER = ((F.col("source_system") != "LOTTERY") & (F.col("game_category_id").isin(*ONLINE_CASINO_CATEGORY_IDS)))
@@ -99,13 +106,17 @@ GAME_CATS_ALLOCATION = [1, 3, 6]
 
 ONLINE_FILTER = ((F.col("source_system") != "LOTTERY") & (F.col("game_category_id").isin(*ONLINE_CASINO_CATEGORY_IDS)))
 LIVE_FILTER   = ((F.col("source_system") != "LOTTERY") & (F.col("game_category_id").isin(*LIVE_CASINO_CATEGORY_IDS)))
+SPORTS_FILTER   = ((F.col("source_system") != "LOTTERY") & (F.col("game_category_id").isin(*SPORTS_CATEGORY_IDS)))
 
 
 
 ANALYSIS_FILTERS = {
-    # "analysis_1": ONLINE_FILTER,
-    # "analysis_5": (ONLINE_FILTER | LIVE_FILTER),
-    "analysis_6": (ONLINE_FILTER | LIVE_FILTER)
+    "analysis_1": ONLINE_FILTER,
+    "analysis_2": LIVE_FILTER,
+    "analysis_3": SPORTS_FILTER,
+    "analysis_4": (ONLINE_FILTER | LIVE_FILTER | SPORTS_FILTER),
+    # "analysis_5": (ONLINE_FILTER | LIVE_FILTER),  # APPROACH 1
+    # "analysis_6": (ONLINE_FILTER | LIVE_FILTER)     # APPROACH 2
 }
 
 

@@ -24,6 +24,14 @@ from pyspark.sql.functions import broadcast
 # COMMAND ----------
 
 # MAGIC %sql
+# MAGIC select      distinct fw.source_system, dg.game_category_id, dg.game_category_description
+# MAGIC from        prod_gold.finance.fact_wager fw
+# MAGIC inner join  prod_gold.shared.dim_game dg on dg.game_sk = fw.game_sk
+# MAGIC where       fw.date_sk >= 20250317
+
+# COMMAND ----------
+
+# MAGIC %sql
 # MAGIC select          *
 # MAGIC from            prod_gold.finance.fact_rtp
 

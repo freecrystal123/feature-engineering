@@ -1285,14 +1285,22 @@ def get_html_cluster_detailed_information(analysis: str):
     )
 
     # ======================================================
-    # % USERS WHO ALSO PLAY LIVE (cat=3), SPORTS (cat=6), BOTH
+    # % USERS BY PROFILE (CASINO / HYBRID / SPORTS)
+    # Casino = Online Casino (cat=1) + Live Casino (cat=3)
+    # Sports = cat=6
+    # Rule (wager share):
+    # - Casino: casino_share >= 60%
+    # - Sports: sports_share >= 60%
+    # - Hybrid: otherwise (between 40% and 60%)
     # Window: last DAYS_ALL days (same as activity)
     # Uses SETTLED wagers to avoid counting un-settled noise
     # ======================================================
+    ONLINE_CAT = 1
     LIVE_CAT = 3
     SPORTS_CAT = 6
+    PROFILE_THRESHOLD = 0.60
 
-    fsw_presence = (
+    fsw_profile = (
         _filter_last_days(settled_wager, days=DAYS_ALL, ts_col="wager_settlement_timestamp").alias("f")
         .join(
             dim_game.select("game_sk", "source_system", "game_category_id").alias("g"),
@@ -1302,7 +1310,7 @@ def get_html_cluster_detailed_information(analysis: str):
         # IMPORTANT: drop duplicated join keys from dim_game side to avoid ambiguity later
         .drop(F.col("g.game_sk"), F.col("g.source_system"))
         .filter(F.upper(F.col("f.source_system")) != F.lit("LOTTERY"))
-        .filter(F.col("g.game_category_id").isin([LIVE_CAT, SPORTS_CAT]))
+        .filter(F.col("g.game_category_id").isin([ONLINE_CAT, LIVE_CAT, SPORTS_CAT]))
         .join(
             user.select("user_sk", "source_system", "user_id", "is_test_user").alias("u"),
             (F.col("f.user_sk") == F.col("u.user_sk")) & (F.col("f.source_system") == F.col("u.source_system")),
@@ -1315,32 +1323,65 @@ def get_html_cluster_detailed_information(analysis: str):
             F.col("u.user_id").alias("user_id"),
             F.col("u.source_system").alias("source_system"),
             F.col("g.game_category_id").alias("game_category_id"),
+            F.coalesce(F.col("f.wager_amount").cast("double"), F.lit(0.0)).alias("wager_amount"),
         )
-        .dropDuplicates(["user_id", "source_system", "game_category_id"])
     )
 
-    presence_flags_by_user = (
-        fsw_presence
+    user_profile_shares = (
+        fsw_profile
         .groupBy("user_id", "source_system")
         .agg(
-            F.max(F.when(F.col("game_category_id") == F.lit(LIVE_CAT), F.lit(1)).otherwise(F.lit(0))).alias("plays_live"),
-            F.max(F.when(F.col("game_category_id") == F.lit(SPORTS_CAT), F.lit(1)).otherwise(F.lit(0))).alias("plays_sports"),
+            F.sum(
+                F.when(F.col("game_category_id").isin([ONLINE_CAT, LIVE_CAT]), F.col("wager_amount")).otherwise(F.lit(0.0))
+            ).alias("casino_wager"),
+            F.sum(
+                F.when(F.col("game_category_id") == F.lit(SPORTS_CAT), F.col("wager_amount")).otherwise(F.lit(0.0))
+            ).alias("sports_wager"),
         )
-        .withColumn("plays_both", (F.col("plays_live") * F.col("plays_sports")).cast("int"))
+        .withColumn("total_wager", F.col("casino_wager") + F.col("sports_wager"))
+        .withColumn(
+            "casino_share",
+            F.when(F.col("total_wager") > F.lit(0.0), F.col("casino_wager") / F.col("total_wager")).otherwise(F.lit(0.5))
+        )
+        .withColumn(
+            "sports_share",
+            F.when(F.col("total_wager") > F.lit(0.0), F.col("sports_wager") / F.col("total_wager")).otherwise(F.lit(0.5))
+        )
+        .withColumn(
+            "is_casino_profile",
+            F.when(F.col("casino_share") >= F.lit(PROFILE_THRESHOLD), F.lit(1)).otherwise(F.lit(0))
+        )
+        .withColumn(
+            "is_sports_profile",
+            F.when(F.col("sports_share") >= F.lit(PROFILE_THRESHOLD), F.lit(1)).otherwise(F.lit(0))
+        )
+        .withColumn(
+            "is_hybrid_profile",
+            F.when(
+                (F.col("casino_share") < F.lit(PROFILE_THRESHOLD)) & (F.col("sports_share") < F.lit(PROFILE_THRESHOLD)),
+                F.lit(1)
+            ).otherwise(F.lit(0))
+        )
     )
 
-    cluster_play_pcts = (
+    cluster_profile_pcts = (
         predicted_df.alias("p")
         .join(
-            presence_flags_by_user.alias("f"),
+            user_profile_shares.alias("f"),
             (F.col("p.unique_user_id") == F.concat_ws("-", F.col("f.source_system"), F.col("f.user_id"))),
             "left"
         )
+        .withColumn("is_casino_profile", F.coalesce(F.col("is_casino_profile"), F.lit(0)))
+        .withColumn("is_sports_profile", F.coalesce(F.col("is_sports_profile"), F.lit(0)))
+        .withColumn(
+            "is_hybrid_profile",
+            F.when(F.col("is_hybrid_profile").isNull(), F.lit(1)).otherwise(F.col("is_hybrid_profile"))
+        )
         .groupBy("cluster_id")
         .agg(
-            F.avg(F.coalesce(F.col("plays_live"), F.lit(0))).alias("pct_live"),
-            F.avg(F.coalesce(F.col("plays_sports"), F.lit(0))).alias("pct_sports"),
-            F.avg(F.coalesce(F.col("plays_both"), F.lit(0))).alias("pct_both"),
+            F.avg(F.col("is_casino_profile")).alias("pct_profile_casino"),
+            F.avg(F.col("is_hybrid_profile")).alias("pct_profile_hybrid"),
+            F.avg(F.col("is_sports_profile")).alias("pct_profile_sports"),
         )
     )
 
@@ -1525,8 +1566,8 @@ def get_html_cluster_detailed_information(analysis: str):
         cluster_agg
         .join(cluster_sizes, "cluster_id", "left")
         .join(clusters_meta_df, "cluster_id", "left")
-        .join(cluster_play_pcts, "cluster_id", "left")
-        .fillna({"num_users": 0, "pct_live": 0.0, "pct_sports": 0.0, "pct_both": 0.0})
+        .join(cluster_profile_pcts, "cluster_id", "left")
+        .fillna({"num_users": 0, "pct_profile_casino": 0.0, "pct_profile_hybrid": 0.0, "pct_profile_sports": 0.0})
         .withColumn(
             "avg_wager_per_user",
             F.when(F.col("num_users") > 0, F.col("total_wager_cat1") / F.col("num_users")).otherwise(F.lit(0.0))
@@ -2029,9 +2070,9 @@ def get_html_cluster_detailed_information(analysis: str):
         avg_revenue = _fmt_money(row.get("avg_revenue_per_user", np.nan))
         total_rev = _fmt_money(row.get("total_revenue_cat1", 0.0))
 
-        pct_live   = _fmt_pct(row.get("pct_live", 0.0))
-        pct_sports = _fmt_pct(row.get("pct_sports", 0.0))
-        pct_both   = _fmt_pct(row.get("pct_both", 0.0))
+        pct_profile_casino = _fmt_pct(row.get("pct_profile_casino", 0.0))
+        pct_profile_hybrid = _fmt_pct(row.get("pct_profile_hybrid", 0.0))
+        pct_profile_sports = _fmt_pct(row.get("pct_profile_sports", 0.0))
 
         # LEFT: 365d
         hx_365, hy_365 = _hour_series_for_cluster(cid, hourly_365_pdf)
@@ -2138,16 +2179,16 @@ def get_html_cluster_detailed_information(analysis: str):
                 <div class="kpi-value">${total_rev}</div>
             </div>
             <div class="kpi">
-                <div class="kpi-label">% users also play Live Casino</div>
-                <div class="kpi-value">{pct_live}</div>
+                <div class="kpi-label">% users profile: Casino</div>
+                <div class="kpi-value">{pct_profile_casino}</div>
             </div>
             <div class="kpi">
-                <div class="kpi-label">% users also play Sports</div>
-                <div class="kpi-value">{pct_sports}</div>
+                <div class="kpi-label">% users profile: Hybrid (Casino + Sports)</div>
+                <div class="kpi-value">{pct_profile_hybrid}</div>
             </div>
             <div class="kpi">
-                <div class="kpi-label">% users play both (Live + Sports)</div>
-                <div class="kpi-value">{pct_both}</div>
+                <div class="kpi-label">% users profile: Sports</div>
+                <div class="kpi-value">{pct_profile_sports}</div>
             </div>
             </div>
 

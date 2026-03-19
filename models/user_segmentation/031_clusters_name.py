@@ -29,7 +29,7 @@ import re
 TOP_N_FEATURES = 6 # top variables for PCA components naming
 TOP_N_PCA_COMP = 0 # all
 
-NAME_PCAS = False
+NAME_PCAS = True
 NAME_CLUSTERS = True
 
 # COMMAND ----------

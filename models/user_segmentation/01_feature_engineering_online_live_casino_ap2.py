@@ -15,11 +15,6 @@ from pyspark.sql.functions import broadcast
 # COMMAND ----------
 
 
-ANALYSIS_ID = 'analysis_6'
-ANALYSIS_NAME = 'online_live_casino_ap2'
-ANALYSIS_FILTER = ANALYSIS_FILTERS[ANALYSIS_ID]
-
-
 current_date = CURRENT_DATE
 
 
@@ -131,7 +126,8 @@ withdraw = (
 
 # COMMAND ----------
 
-def get_features_a():
+def get_features_a(analysis: str):
+    ANALYSIS_FILTER = ANALYSIS_FILTERS[analysis]
 
     # Compute engagement metrics
     w_win = Window.partitionBy("user_id","source_system").orderBy(F.col('event_ts').cast("timestamp"))
@@ -195,7 +191,8 @@ def get_features_a():
 
 # COMMAND ----------
 
-def get_features_b():
+def get_features_b(analysis: str):
+    ANALYSIS_FILTER = ANALYSIS_FILTERS[analysis]
 
     # Base financial from wager
     finance_wager = (
@@ -254,7 +251,9 @@ def get_features_b():
 
 # COMMAND ----------
 
-def get_features_c():
+def get_features_c(analysis: str):
+
+    ANALYSIS_FILTER = ANALYSIS_FILTERS[analysis]
 
     # ==== 1. Win/Loss Rate ========================================================
     win_condition = F.col("wager_winning_status_id") == F.lit(3) 
@@ -425,7 +424,8 @@ def get_features_c():
 
 # COMMAND ----------
 
-def get_features_d():
+def get_features_d(analysis: str):
+    ANALYSIS_FILTER = ANALYSIS_FILTERS[analysis]
         
     rfm = (
         wager
@@ -475,7 +475,9 @@ def get_features_d():
 
 # COMMAND ----------
 
-def get_features_e():
+def get_features_e(analysis: str):
+    ANALYSIS_FILTER = ANALYSIS_FILTERS[analysis]
+    
     coupon_features = (
         wager
             .filter(ANALYSIS_FILTER)
@@ -502,12 +504,12 @@ def get_features_e():
 
 # COMMAND ----------
 
-def get_all_features():
-    features_A = get_features_a()
-    features_B = get_features_b()
-    features_C = get_features_c()
-    features_D = get_features_d()
-    features_E = get_features_e()
+def get_all_features(analysis: str):
+    features_A = get_features_a(analysis)
+    features_B = get_features_b(analysis)
+    features_C = get_features_c(analysis)
+    features_D = get_features_d(analysis)
+    features_E = get_features_e(analysis)
 
     features = (
         features_A
@@ -535,19 +537,15 @@ def get_all_features():
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
 
-features = get_all_features()
-(
-    features
-    .withColumn("created_at", F.current_timestamp())
-    .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{ANALYSIS_NAME}")
-)
 
-# for analysis, analysis_name in ANALYSIS_NAMES.items():
-#     features = get_all_features(analysis)
-#     (
-#         features
-#         .withColumn("created_at", F.current_timestamp())
-#         .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-#         .saveAsTable(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}")
-#     )
+
+for analysis, analysis_name in ANALYSIS_NAMES.items():
+    print(f"Processing {analysis_name}...")
+
+    features = get_all_features(analysis)
+    (
+        features
+        .withColumn("created_at", F.current_timestamp())
+        .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
+        .saveAsTable(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}")
+    )
