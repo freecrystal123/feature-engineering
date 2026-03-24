@@ -80,12 +80,12 @@ ANALYSIS_NAMES = {
     "analysis_1": "online_casino",
     "analysis_2": "live_casino",
     "analysis_3": "sports",
-    "analysis_4": "ols"
+    "analysis_4": "ols",
+"analysis_6":"online_live_casino_ap2"
 }
 # ANALYSIS_NAMES = {
 #     "analysis_6":"online_live_casino_ap2"
 # }
-    
 
 
 
@@ -115,8 +115,8 @@ ANALYSIS_FILTERS = {
     "analysis_2": LIVE_FILTER,
     "analysis_3": SPORTS_FILTER,
     "analysis_4": (ONLINE_FILTER | LIVE_FILTER | SPORTS_FILTER),
-    # "analysis_5": (ONLINE_FILTER | LIVE_FILTER),  # APPROACH 1
-    # "analysis_6": (ONLINE_FILTER | LIVE_FILTER)     # APPROACH 2
+    "analysis_5": (ONLINE_FILTER | LIVE_FILTER),  # APPROACH 1
+    "analysis_6": (ONLINE_FILTER | LIVE_FILTER)     # APPROACH 2
 }
 
 
