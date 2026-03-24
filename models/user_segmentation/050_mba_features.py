@@ -11,23 +11,12 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./00_config
+# MAGIC %run ./050_config_mba
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.sql import DataFrame
-
-# COMMAND ----------
-
-MBA_ANALYSIS = "analysis_4"  # Online Casino + Live Casino + Sports
-MBA_LOOKBACK_DAYS_LIST = [30, 365]
-MBA_MIN_BETS_PER_ITEM = 3
-MBA_MIN_WAGER_PER_ITEM = 50.0
-MBA_MIN_ITEMS_PER_USER = 2
-
-T_MBA_USER_ITEM_FEATURES_PREFIX = f"{WRITE_SCHEMA}.mba_user_item_features"
-T_MBA_TRANSACTIONS_PREFIX = f"{WRITE_SCHEMA}.mba_transactions"
 
 # COMMAND ----------
 

@@ -12,35 +12,12 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./00_config
+# MAGIC %run ./050_config_mba
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.ml.fpm import FPGrowth
-
-# COMMAND ----------
-
-MBA_ANALYSIS = "analysis_4"
-MBA_LOOKBACK_DAYS_LIST = [30, 365]
-
-MBA_MIN_SUPPORT = 0.003
-MBA_MIN_CONFIDENCE = 0.10
-MBA_MIN_LIFT = 1.05
-TOP_RULES = 500
-
-# Fallback (mlxtend Apriori) memory controls
-MBA_FALLBACK_MIN_SUPPORT = 0.01
-MBA_FALLBACK_MIN_CONFIDENCE = 0.15
-MBA_FALLBACK_TOP_ITEMS = 400
-MBA_FALLBACK_MAX_USERS = 250000
-MBA_FALLBACK_SAMPLE_SEED = 42
-MBA_PAIRWISE_MAX_ITEMS_PER_USER = 80
-
-T_MBA_TRANSACTIONS_PREFIX = f"{WRITE_SCHEMA}.mba_transactions"
-T_MBA_RULES_PREFIX = f"{WRITE_SCHEMA}.mba_association_rules"
-T_MBA_RULES_CROSS_PREFIX = f"{WRITE_SCHEMA}.mba_association_rules_cross"
-T_MBA_RULES_FOCUS_PREFIX = f"{WRITE_SCHEMA}.mba_association_rules_focus"
 
 # COMMAND ----------
 
@@ -378,7 +355,7 @@ for d in MBA_LOOKBACK_DAYS_LIST:
         .select("antecedent","consequent","support","confidence","lift")
         .filter(F.col("lookback_days") == F.lit(int(d)))
         .orderBy(F.col("lift").desc_nulls_last(), F.col("confidence").desc())
-        .limit(TOP_RULES)
+        .limit(MBA_TOP_RULES)
     )
 
 # COMMAND ----------
