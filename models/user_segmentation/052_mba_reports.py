@@ -71,6 +71,13 @@ def _fmt_num(x):
     return f"{int(x):,}"
 
 
+def _split_rule_side(side_text: str):
+    if "::" in side_text:
+        prefix, name = side_text.split("::", 1)
+        return prefix.strip().upper(), name.strip()
+    return "ITEM", side_text.strip()
+
+
 def _render_window_column(days: int, pdf):
     if pdf.empty:
         return f"""
@@ -88,6 +95,12 @@ def _render_window_column(days: int, pdf):
     for i, row in pdf.reset_index(drop=True).iterrows():
         ant = escape(str(row["antecedent_str"]))
         cons = escape(str(row["consequent_str"]))
+        ant_label, ant_name = _split_rule_side(str(row["antecedent_str"]))
+        cons_label, cons_name = _split_rule_side(str(row["consequent_str"]))
+        ant_label = escape(ant_label)
+        ant_name = escape(ant_name)
+        cons_label = escape(cons_label)
+        cons_name = escape(cons_name)
         lift = float(row["lift"])
         conf = float(row["confidence"])
         supp = float(row["support"])
@@ -97,7 +110,17 @@ def _render_window_column(days: int, pdf):
         rule_cards.append(
             f"""
             <li class=\"rule-item{conf_class}\">
-              <div class=\"rule-title\">{ant} &rarr; {cons}</div>
+              <div class=\"rule-flow\">
+                <div class=\"rule-side\">
+                  <div class=\"rule-side-label\">{ant_label}</div>
+                  <div class=\"rule-side-name\">{ant_name}</div>
+                </div>
+                <div class=\"rule-arrow\">&rarr;</div>
+                <div class=\"rule-side\">
+                  <div class=\"rule-side-label\">{cons_label}</div>
+                  <div class=\"rule-side-name\">{cons_name}</div>
+                </div>
+              </div>
               <ul class=\"metric-bullets\">
                 <li><span class=\"material-symbols-rounded metric-icon\">trending_up</span><b>Lift:</b> {lift:.2f}x</li>
                 <li><span class=\"material-symbols-rounded metric-icon\">verified</span><b>Confidence:</b> {_fmt_pct(conf)}</li>
@@ -138,6 +161,10 @@ html = f"""
       <span class=\"badge\">Windows: 365d and 30d</span>
       <span class=\"badge\">Scope: Cross-platform rules</span>
     </div>
+  </div>
+  <div class=\"legend\">
+    <span class=\"material-symbols-rounded metric-icon\">verified</span>
+    <span><b>Legend:</b> Green rule text means <b>confidence &ge; 45%</b>.</span>
   </div>
 
   <div class=\"twocol\">
@@ -199,6 +226,14 @@ html = f"""
   border-radius: 999px;
   white-space: nowrap;
 }}
+.legend {{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}}
 
 .twocol {{
   display: grid;
@@ -245,7 +280,35 @@ html = f"""
   padding: 10px;
   background: rgba(255,255,255,0.02);
 }}
-.rule-title {{ font-weight: 700; margin-bottom: 8px; line-height: 1.3; }}
+.rule-flow {{
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: 10px;
+  margin-bottom: 10px;
+}}
+.rule-side {{
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(255,255,255,0.03);
+}}
+.rule-side-label {{
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}}
+.rule-side-name {{ font-size: 14px; font-weight: 700; line-height: 1.25; }}
+.rule-arrow {{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--muted);
+}}
 .metric-bullets {{
   margin: 0;
   padding-left: 0;
@@ -264,10 +327,11 @@ html = f"""
   color: var(--muted);
 }}
 .rule-item.confidence-high,
-.rule-item.confidence-high .rule-title,
+.rule-item.confidence-high .rule-side-name,
 .rule-item.confidence-high .metric-bullets,
 .rule-item.confidence-high .metric-bullets b,
-.rule-item.confidence-high .metric-icon {{
+.rule-item.confidence-high .metric-icon,
+.rule-item.confidence-high .rule-arrow {{
   color: #00D18F !important;
 }}
 
