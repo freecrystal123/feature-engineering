@@ -99,10 +99,9 @@ def _render_window_column(days: int, pdf):
             <li class=\"rule-item{conf_class}\">
               <div class=\"rule-title\">{ant} &rarr; {cons}</div>
               <ul class=\"metric-bullets\">
-                <li><b>Lift:</b> {lift:.2f}x</li>
-                <li><b>Confidence:</b> {_fmt_pct(conf)}</li>
-                <li><b>Support:</b> {_fmt_pct(supp)}</li>
-                <li><b>Estimated users:</b> {_fmt_num(users)}</li>
+                <li><span class=\"material-symbols-rounded metric-icon\">trending_up</span><b>Lift:</b> {lift:.2f}x</li>
+                <li><span class=\"material-symbols-rounded metric-icon\">verified</span><b>Confidence:</b> {_fmt_pct(conf)}</li>
+                <li><span class=\"material-symbols-rounded metric-icon\">group</span><b>Estimated users:</b> {_fmt_num(users)}</li>
               </ul>
             </li>
             """
@@ -128,6 +127,7 @@ left_col_html = _render_window_column(365, rules_365_pdf)
 right_col_html = _render_window_column(30, rules_30_pdf)
 
 html = f"""
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20,600,1,0" />
 <div class=\"report\" data-theme=\"dark\">
   <div class=\"header\">
     <div>
@@ -248,14 +248,26 @@ html = f"""
 .rule-title {{ font-weight: 700; margin-bottom: 8px; line-height: 1.3; }}
 .metric-bullets {{
   margin: 0;
-  padding-left: 16px;
+  padding-left: 0;
   color: var(--text);
   line-height: 1.4;
+  list-style: none;
+}}
+.metric-bullets li {{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}}
+.metric-icon {{
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
 }}
 .rule-item.confidence-high,
 .rule-item.confidence-high .rule-title,
 .rule-item.confidence-high .metric-bullets,
-.rule-item.confidence-high .metric-bullets b {{
+.rule-item.confidence-high .metric-bullets b,
+.rule-item.confidence-high .metric-icon {{
   color: #00D18F !important;
 }}
 
@@ -266,7 +278,12 @@ html = f"""
 }}
 
 .displayedHTML,
-.displayedHTML > div {{ background: #000 !important; }}
+.displayedHTML > div,
+.displayedHTML .output_html,
+.displayedHTML .output_subarea,
+body {{
+  background: #000 !important;
+}}
 </style>
 """
 
