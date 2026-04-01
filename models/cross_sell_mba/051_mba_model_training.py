@@ -12,7 +12,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./050_config_mba
+# MAGIC %run ./00_config
 
 # COMMAND ----------
 

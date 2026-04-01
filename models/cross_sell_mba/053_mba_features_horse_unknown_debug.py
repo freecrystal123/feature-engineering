@@ -37,7 +37,7 @@
 # MAGIC   regexp_extract(unique_user_id, '^[^-]+-(.*)$', 1) AS user_id
 # MAGIC FROM dbg_target_users;
 # MAGIC
-# MAGIC -- Keep thresholds aligned with 050_config_mba.py
+# MAGIC -- Keep thresholds aligned with cross_sell_mba/00_config.py
 # MAGIC CREATE OR REPLACE TEMP VIEW dbg_thresholds AS
 # MAGIC SELECT
 # MAGIC   3   AS min_bets_per_item,
@@ -53,7 +53,7 @@
 
 # MAGIC %sql
 # MAGIC SELECT *
-# MAGIC FROM uat_analytics.user_segmentation.mba_user_item_features_ols
+# MAGIC FROM uat_analytics.cross_sell_mba.mba_user_item_features_ols
 # MAGIC WHERE unique_user_id IN (SELECT unique_user_id FROM dbg_target_users)
 # MAGIC ORDER BY unique_user_id, lookback_days, vertical, item_id;
 
@@ -61,7 +61,7 @@
 
 # MAGIC %sql
 # MAGIC SELECT *
-# MAGIC FROM uat_analytics.user_segmentation.mba_transactions_ols
+# MAGIC FROM uat_analytics.cross_sell_mba.mba_transactions_ols
 # MAGIC WHERE unique_user_id IN (SELECT unique_user_id FROM dbg_target_users)
 # MAGIC ORDER BY unique_user_id, lookback_days;
 
@@ -363,6 +363,6 @@
 # MAGIC   o.sports_items_count,
 # MAGIC   o.num_items,
 # MAGIC   o.is_cross_platform_user
-# MAGIC FROM uat_analytics.user_segmentation.mba_transactions_ols o
+# MAGIC FROM uat_analytics.cross_sell_mba.mba_transactions_ols o
 # MAGIC WHERE o.unique_user_id IN (SELECT unique_user_id FROM dbg_target_users)
 # MAGIC ORDER BY unique_user_id, lookback_days, origin;

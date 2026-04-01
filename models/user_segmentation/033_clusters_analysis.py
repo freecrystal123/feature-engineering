@@ -29,21 +29,19 @@ rename_pca("analysis_6", old_name="Loss Dominance", new_name="Loss-Weighted", ne
 # COMMAND ----------
 
 from pyspark.sql import functions as F
-import mlflow
 import numpy as np
+from models.utils import get_model as get_registered_model
 
 # COMMAND ----------
 
 def get_model(analysis: str, version: int):
-    model_uri = get_model_uri(analysis, version)
-
-    try:
-        sk_model = mlflow.sklearn.load_model(model_uri)
-    except Exception:
-        pyfunc_model = mlflow.pyfunc.load_model(model_uri)
-        sk_model = pyfunc_model._model_impl.python_model.model
-    
-    return sk_model
+    analysis_name = ANALYSIS_NAMES[analysis]
+    return get_registered_model(
+        subject=SUBJECT_NAME,
+        analysis_name=analysis_name,
+        catalog=WRITE_CATALOG,
+        version=version,
+    )
 
 # # pipeline esperado: PCA + KMeans
 # pca = sk_model.named_steps["pca"]

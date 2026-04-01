@@ -1,9 +1,21 @@
 # Databricks notebook source
-# COMMAND ----------
-
-# MAGIC %run ./00_config
+# MAGIC %run ../00_config
 
 # COMMAND ----------
+
+# Domain-specific settings
+SUBJECT_NAME = "cross_sell_mba"
+WRITE_SCHEMA_NAME = SUBJECT_NAME
+WRITE_SCHEMA = get_write_schema(SUBJECT_NAME)
+
+REPORT_DIR = get_report_dir(SUBJECT_NAME)
+REPORT_SPACE = get_report_space(SUBJECT_NAME)
+MODEL_SPACE_PREFIX = get_model_space_prefix(SUBJECT_NAME)
+
+# Keep naming aligned with existing analysis ids
+ANALYSIS_NAMES = {
+    "analysis_4": "ols",
+}
 
 # Shared MBA configuration
 MBA_ANALYSIS = "analysis_4"  # Online Casino + Live Casino + Sports
