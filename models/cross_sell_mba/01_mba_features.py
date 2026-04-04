@@ -17,6 +17,7 @@
 
 from pyspark.sql import functions as F
 from pyspark.sql import DataFrame
+from models.utils import publish_table, read_current_table
 
 # COMMAND ----------
 
@@ -213,26 +214,44 @@ for d in MBA_LOOKBACK_DAYS_LIST:
 
 # COMMAND ----------
 
-(
-    all_user_item_features
-    .withColumn("analysis_id", F.lit(MBA_ANALYSIS))
-    .withColumn("analysis_name", F.lit(analysis_name))
-    .withColumn("created_at", F.current_timestamp())
-    .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{T_MBA_USER_ITEM_FEATURES_PREFIX}_{analysis_name}")
+user_item_base = f"{T_MBA_USER_ITEM_FEATURES_PREFIX}_{analysis_name}"
+transactions_base = f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}"
+
+user_item_publish = publish_table(
+    spark=spark,
+    df=(
+        all_user_item_features
+        .withColumn("analysis_id", F.lit(MBA_ANALYSIS))
+        .withColumn("analysis_name", F.lit(analysis_name))
+        .withColumn("created_at", F.current_timestamp())
+    ),
+    table_base=user_item_base,
+    analysis_name=analysis_name,
 )
 
-(
-    all_transactions
-    .withColumn("analysis_id", F.lit(MBA_ANALYSIS))
-    .withColumn("analysis_name", F.lit(analysis_name))
-    .withColumn("created_at", F.current_timestamp())
-    .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}")
+transactions_publish = publish_table(
+    spark=spark,
+    df=(
+        all_transactions
+        .withColumn("analysis_id", F.lit(MBA_ANALYSIS))
+        .withColumn("analysis_name", F.lit(analysis_name))
+        .withColumn("created_at", F.current_timestamp())
+    ),
+    table_base=transactions_base,
+    analysis_name=analysis_name,
+    run_id=user_item_publish["run_id"],
 )
 
-print(f"Saved: {T_MBA_USER_ITEM_FEATURES_PREFIX}_{analysis_name} (lookbacks={MBA_LOOKBACK_DAYS_LIST})")
-print(f"Saved: {T_MBA_TRANSACTIONS_PREFIX}_{analysis_name} (lookbacks={MBA_LOOKBACK_DAYS_LIST})")
+print(
+    "Published: "
+    f"{user_item_publish['snapshot_table']} and {user_item_publish['current_table']} "
+    f"(lookbacks={MBA_LOOKBACK_DAYS_LIST}, run_id={user_item_publish['run_id']})"
+)
+print(
+    "Published: "
+    f"{transactions_publish['snapshot_table']} and {transactions_publish['current_table']} "
+    f"(lookbacks={MBA_LOOKBACK_DAYS_LIST}, run_id={transactions_publish['run_id']})"
+)
 print(
     "Sports naming join used: "
     f"settled_wager.{settled_wager_sk_col} -> dim_wager.{dw_wager_sk_col} -> "
@@ -242,7 +261,10 @@ print(
 # COMMAND ----------
 
 display(
-    spark.table(f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}")
+    read_current_table(
+        spark=spark,
+        table_base=f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}",
+    )
     .groupBy("lookback_days")
     .agg(
         F.countDistinct("unique_user_id").alias("num_users"),

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 from typing import Any
+from uuid import uuid4
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,119 @@ def _mlflow_client():
     from mlflow import MlflowClient
 
     return MlflowClient()
+
+
+def snapshot_table_name(table_base: str) -> str:
+    return f"{table_base}_snapshot"
+
+
+def current_table_name(table_base: str) -> str:
+    return f"{table_base}_current"
+
+
+def _table_schema_name(table_name: str) -> str:
+    parts = table_name.split(".")
+    if len(parts) < 2:
+        raise ValueError(f"Expected fully-qualified table name, got: {table_name}")
+    return ".".join(parts[:-1])
+
+
+def _ensure_schema(spark, table_name: str) -> None:
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {_table_schema_name(table_name)}")
+
+
+def _with_col_if_missing(df, col_name: str, expr):
+    if col_name in df.columns:
+        return df
+    return df.withColumn(col_name, expr)
+
+
+def publish_table(
+    *,
+    spark,
+    df,
+    table_base: str,
+    analysis_name: str | None = None,
+    ref_date: str | None = None,
+    run_id: str | None = None,
+    current_mode: str = "view",
+) -> dict[str, Any]:
+    """
+    Publish a dataframe using snapshot/current convention.
+    - Snapshot: append-only historical table
+    - Current: latest approved run as a view (default) or physical table
+    """
+    snapshot_name = snapshot_table_name(table_base)
+    current_name = current_table_name(table_base)
+    current_mode = current_mode.lower().strip()
+    if current_mode not in {"view", "table"}:
+        raise ValueError("current_mode must be 'view' or 'table'")
+
+    _ensure_schema(spark, snapshot_name)
+    _ensure_schema(spark, current_name)
+
+    rid = run_id or str(uuid4())
+    from pyspark.sql import functions as F
+
+    out_df = df
+    out_df = _with_col_if_missing(out_df, "run_id", F.lit(rid))
+    out_df = _with_col_if_missing(out_df, "run_ts", F.current_timestamp())
+    out_df = _with_col_if_missing(
+        out_df,
+        "ref_date",
+        F.to_date(F.lit(ref_date)) if ref_date is not None else F.current_date(),
+    )
+    if analysis_name is not None:
+        out_df = _with_col_if_missing(out_df, "analysis_name", F.lit(analysis_name))
+
+    out_df.write.format("delta").mode("append").saveAsTable(snapshot_name)
+
+    if current_mode == "view":
+        spark.sql(
+            f"""
+            CREATE OR REPLACE VIEW {current_name} AS
+            SELECT *
+            FROM {snapshot_name}
+            WHERE run_id = '{rid}'
+            """
+        )
+    else:
+        out_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(current_name)
+
+    return {
+        "table_base": table_base,
+        "snapshot_table": snapshot_name,
+        "current_table": current_name,
+        "run_id": rid,
+        "current_mode": current_mode,
+    }
+
+
+def read_current_table(*, spark, table_base: str):
+    current_name = current_table_name(table_base)
+    snapshot_name = snapshot_table_name(table_base)
+
+    if spark.catalog.tableExists(current_name):
+        return spark.table(current_name)
+
+    if spark.catalog.tableExists(snapshot_name):
+        return spark.sql(
+            f"""
+            SELECT *
+            FROM {snapshot_name}
+            WHERE run_ts = (
+              SELECT MAX(run_ts) FROM {snapshot_name}
+            )
+            """
+        )
+
+    if spark.catalog.tableExists(table_base):
+        return spark.table(table_base)
+
+    raise ValueError(
+        f"Table not found for base '{table_base}'. "
+        f"Tried: '{current_name}', '{snapshot_name}', '{table_base}'."
+    )
 
 
 def build_model_name(subject: str, analysis_name: str, catalog: str = "uat_analytics") -> str:

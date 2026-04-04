@@ -18,13 +18,20 @@
 
 from pyspark.sql import functions as F
 from html import escape
+from models.utils import read_current_table
 
 # COMMAND ----------
 
 analysis_name = ANALYSIS_NAMES[MBA_ANALYSIS]
 
-rules_df = spark.table(f"{T_MBA_RULES_CROSS_PREFIX}_{analysis_name}")
-transactions_df = spark.table(f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}")
+rules_df = read_current_table(
+    spark=spark,
+    table_base=f"{T_MBA_RULES_CROSS_PREFIX}_{analysis_name}",
+)
+transactions_df = read_current_table(
+    spark=spark,
+    table_base=f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}",
+)
 
 # Ensure report volume exists
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {REPORT_SPACE}")

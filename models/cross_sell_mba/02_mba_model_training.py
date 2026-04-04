@@ -18,11 +18,15 @@
 
 from pyspark.sql import functions as F
 from pyspark.ml.fpm import FPGrowth
+from models.utils import publish_table, read_current_table
 
 # COMMAND ----------
 
 analysis_name = ANALYSIS_NAMES[MBA_ANALYSIS]
-transactions = spark.table(f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}")
+transactions = read_current_table(
+    spark=spark,
+    table_base=f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}",
+)
 
 # COMMAND ----------
 
@@ -323,27 +327,35 @@ if all_rules is None:
 
 # COMMAND ----------
 
-(
-    all_rules
-    .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{T_MBA_RULES_PREFIX}_{analysis_name}")
+rules_base = f"{T_MBA_RULES_PREFIX}_{analysis_name}"
+cross_base = f"{T_MBA_RULES_CROSS_PREFIX}_{analysis_name}"
+focus_base = f"{T_MBA_RULES_FOCUS_PREFIX}_{analysis_name}"
+
+rules_publish = publish_table(
+    spark=spark,
+    df=all_rules,
+    table_base=rules_base,
+    analysis_name=analysis_name,
+)
+cross_publish = publish_table(
+    spark=spark,
+    df=all_cross_rules,
+    table_base=cross_base,
+    analysis_name=analysis_name,
+    run_id=rules_publish["run_id"],
+)
+focus_publish = publish_table(
+    spark=spark,
+    df=all_focus_rules,
+    table_base=focus_base,
+    analysis_name=analysis_name,
+    run_id=rules_publish["run_id"],
 )
 
-(
-    all_cross_rules
-    .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{T_MBA_RULES_CROSS_PREFIX}_{analysis_name}")
+print(
+    f"Published rules tables (lookbacks={MBA_LOOKBACK_DAYS_LIST}, run_id={rules_publish['run_id']}): "
+    f"{rules_publish['current_table']}, {cross_publish['current_table']}, {focus_publish['current_table']}"
 )
-
-(
-    all_focus_rules
-    .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{T_MBA_RULES_FOCUS_PREFIX}_{analysis_name}")
-)
-
-print(f"Saved: {T_MBA_RULES_PREFIX}_{analysis_name} (lookbacks={MBA_LOOKBACK_DAYS_LIST})")
-print(f"Saved: {T_MBA_RULES_CROSS_PREFIX}_{analysis_name} (lookbacks={MBA_LOOKBACK_DAYS_LIST})")
-print(f"Saved: {T_MBA_RULES_FOCUS_PREFIX}_{analysis_name} (lookbacks={MBA_LOOKBACK_DAYS_LIST})")
 
 # COMMAND ----------
 
@@ -351,7 +363,10 @@ print(f"Saved: {T_MBA_RULES_FOCUS_PREFIX}_{analysis_name} (lookbacks={MBA_LOOKBA
 for d in MBA_LOOKBACK_DAYS_LIST:
     print(f"Top cross-platform rules | lookback={d} days")
     display(
-        spark.table(f"{T_MBA_RULES_CROSS_PREFIX}_{analysis_name}")
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_MBA_RULES_CROSS_PREFIX}_{analysis_name}",
+        )
         .select("antecedent","consequent","support","confidence","lift")
         .filter(F.col("lookback_days") == F.lit(int(d)))
         .orderBy(F.col("lift").desc_nulls_last(), F.col("confidence").desc())
@@ -364,7 +379,10 @@ for d in MBA_LOOKBACK_DAYS_LIST:
 for d in MBA_LOOKBACK_DAYS_LIST:
     print(f"Focus rules | lookback={d} days")
     display(
-        spark.table(f"{T_MBA_RULES_FOCUS_PREFIX}_{analysis_name}")
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_MBA_RULES_FOCUS_PREFIX}_{analysis_name}",
+        )
         .filter(F.col("lookback_days") == F.lit(int(d)))
         .orderBy(F.col("confidence").desc())
     )
