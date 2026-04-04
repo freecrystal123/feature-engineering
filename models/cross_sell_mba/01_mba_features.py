@@ -1,22 +1,27 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC ## 5.0 - MBA features (Casino + Sports)
+# MAGIC ## 1 - MBA features (Casino + Sports)
 # MAGIC
 # MAGIC Goal:
 # MAGIC - Build user-item baskets for Market Basket Analysis (cross-platform behavior).
 # MAGIC - Use wager facts (`fact_settled_wager`) as the single source of wagers/events.
 # MAGIC - For Sports item names, enrich from `prod_silver.wager.wager_history` +
-# MAGIC   `prod_creative.shared.dim_sport_type` (`sport_type = sport_tyoe`).
+# MAGIC   `prod_creative.shared.dim_sport_type` (`sport_type = sport_type`).
 # MAGIC - For Casino item names, use `dim_game.game_name`.
 
 # COMMAND ----------
 
-# MAGIC %run ./00_config
+# MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.sql import DataFrame
+
+# COMMAND ----------
+
+# Ensure target schema exists before writing MBA tables
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
 
 # COMMAND ----------
 
@@ -56,7 +61,8 @@ dw_source_col = _pick_col(dim_wager, ["source_system", "main_source_system", "so
 
 wh_id_col = _pick_col(wager_history, ["id"], "wager_history id")
 wh_source_col = _pick_col(wager_history, ["source_system", "source"], "wager_history source_system")
-wh_sport_type_col = _pick_col(wager_history, ["sport_type", "sport_tyoe"], "wager_history sport_type")
+wh_sport_type_col = _pick_col(wager_history, ["sport_type"], "wager_history sport_type")
+dst_sport_type_col = _pick_col(dim_sport_type, ["sport_type"], "dim_sport_type sport_type")
 
 # COMMAND ----------
 
@@ -77,7 +83,7 @@ sports_lookup = (
 sports_type_lookup = (
     dim_sport_type
     .select(
-        F.col("sport_tyoe").cast("int").alias("sport_type"),
+        F.col(dst_sport_type_col).cast("int").alias("sport_type"),
         F.col("sport_name").cast("string").alias("sport_name"),
     )
     .dropDuplicates(["sport_type"])

@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC ## 5.2 - MBA Reports
+# MAGIC ## 3 - MBA Reports
 # MAGIC
 # MAGIC Goal:
 # MAGIC - Build an English HTML report for cross-platform MBA rules.
@@ -12,7 +12,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./00_config
+# MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
 

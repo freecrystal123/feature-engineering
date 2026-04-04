@@ -4,7 +4,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./00_config
+# MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
 

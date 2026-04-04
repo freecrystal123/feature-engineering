@@ -1,9 +1,9 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC ## 5.3 - MBA Features Debug (Horse Racing / Unknown Sport)
+# MAGIC ## 4 - MBA Features Debug (Horse Racing / Unknown Sport)
 # MAGIC
 # MAGIC Goal:
-# MAGIC - Rebuild, in SQL, the same ETL logic from `050_mba_features`.
+# MAGIC - Rebuild, in SQL, the same ETL logic from `01_mba_features`.
 # MAGIC - Trace two target users step-by-step.
 # MAGIC - Explain where `sports::Unknown Sport` is created.
 # MAGIC - Compare reconstructed outputs with official MBA tables.
@@ -37,7 +37,7 @@
 # MAGIC   regexp_extract(unique_user_id, '^[^-]+-(.*)$', 1) AS user_id
 # MAGIC FROM dbg_target_users;
 # MAGIC
-# MAGIC -- Keep thresholds aligned with cross_sell_mba/00_config.py
+# MAGIC -- Keep thresholds aligned with cross_sell_mba/00_config_cross_sell_mba.py
 # MAGIC CREATE OR REPLACE TEMP VIEW dbg_thresholds AS
 # MAGIC SELECT
 # MAGIC   3   AS min_bets_per_item,
@@ -73,7 +73,7 @@
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Check column names first (some environments may use sport_type vs sport_tyoe)
+# MAGIC -- Check column names first
 # MAGIC DESCRIBE TABLE prod_silver.wager.wager_history;
 
 # COMMAND ----------
@@ -98,14 +98,14 @@
 # MAGIC
 # MAGIC CREATE OR REPLACE TEMP VIEW dbg_sports_type_lookup AS
 # MAGIC SELECT DISTINCT
-# MAGIC   CAST(s.sport_tyoe AS INT) AS sport_type,
+# MAGIC   CAST(s.sport_type AS INT) AS sport_type,
 # MAGIC   CAST(s.sport_name AS STRING) AS sport_name
 # MAGIC FROM prod_creative.shared.dim_sport_type s;
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3) Rebuild base events exactly like 050_mba_features
+# MAGIC ### 3) Rebuild base events exactly like 01_mba_features
 # MAGIC
 # MAGIC Notes:
 # MAGIC - Scope: categories (1, 3, 6), non-test users, non-lottery.

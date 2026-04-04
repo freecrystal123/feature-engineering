@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC ## 5.1 - MBA model training (FP-Growth with Apriori fallback)
+# MAGIC ## 2 - MBA model training (FP-Growth with Apriori fallback)
 # MAGIC
 # MAGIC Goal:
 # MAGIC - Learn association rules from user baskets.
@@ -12,7 +12,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ./00_config
+# MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
 
