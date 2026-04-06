@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 from typing import Any
+import os
 from uuid import uuid4
 
 
@@ -227,6 +228,125 @@ def set_model_alias(model_name: str, alias: str, version: int):
     client.set_registered_model_alias(model_name, alias, int(version))
 
 
+def _resolve_model_version(model_name: str, *, version: int | None = None, alias: str | None = None, run_id: str | None = None) -> int:
+    client = _mlflow_client()
+
+    if version is not None:
+        return int(version)
+
+    if alias:
+        mv = client.get_model_version_by_alias(model_name, alias)
+        return int(mv.version)
+
+    versions = client.search_model_versions(f"name='{model_name}'")
+    if not versions:
+        raise ValueError(f"No versions found for model '{model_name}'.")
+
+    if run_id:
+        by_run = [v for v in versions if getattr(v, "run_id", None) == run_id]
+        if not by_run:
+            raise ValueError(f"No model version found for model '{model_name}' and run_id '{run_id}'.")
+        return int(max(by_run, key=lambda v: int(v.version)).version)
+
+    return int(max(versions, key=lambda v: int(v.version)).version)
+
+
+def register_candidate(
+    model_name: str,
+    *,
+    version: int | None = None,
+    run_id: str | None = None,
+    alias: str = "challenger",
+    tags: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """
+    Register/select model candidate version and assign candidate alias.
+    """
+    client = _mlflow_client()
+    resolved_version = _resolve_model_version(model_name, version=version, run_id=run_id)
+    client.set_registered_model_alias(model_name, alias, resolved_version)
+
+    if tags:
+        for k, v in tags.items():
+            client.set_model_version_tag(model_name, str(resolved_version), str(k), str(v))
+
+    return {
+        "model_name": model_name,
+        "version": resolved_version,
+        "alias": alias,
+        "run_id": run_id,
+        "registered": True,
+    }
+
+
+def validate_candidate(
+    model_name: str,
+    *,
+    version: int | None = None,
+    alias: str | None = "challenger",
+    required_signature: bool = True,
+    sample_input=None,
+) -> dict[str, Any]:
+    """
+    Validate candidate model availability, signature, and optional sample prediction.
+    """
+    import mlflow
+
+    resolved_version = _resolve_model_version(model_name, version=version, alias=alias)
+    uri = model_uri(model_name, version=resolved_version)
+    pyfunc_model = mlflow.pyfunc.load_model(uri)
+    metadata = getattr(pyfunc_model, "metadata", None)
+    signature = getattr(metadata, "signature", None)
+
+    checks = {
+        "model_load_ok": True,
+        "signature_ok": (signature is not None) if required_signature else True,
+        "sample_predict_ok": True,
+    }
+
+    sample_error = None
+    if sample_input is not None:
+        try:
+            _ = pyfunc_model.predict(sample_input)
+        except Exception as e:
+            checks["sample_predict_ok"] = False
+            sample_error = str(e)
+
+    passed = all(checks.values())
+
+    return {
+        "model_name": model_name,
+        "version": resolved_version,
+        "alias": alias,
+        "uri": uri,
+        "passed": passed,
+        "checks": checks,
+        "sample_error": sample_error,
+    }
+
+
+def promote_alias(
+    model_name: str,
+    *,
+    source_alias: str = "challenger",
+    target_alias: str = "champion",
+    version: int | None = None,
+) -> dict[str, Any]:
+    """
+    Promote model alias (e.g. challenger -> champion) within the same registered model.
+    """
+    client = _mlflow_client()
+    resolved_version = _resolve_model_version(model_name, version=version, alias=source_alias if version is None else None)
+    client.set_registered_model_alias(model_name, target_alias, resolved_version)
+    return {
+        "model_name": model_name,
+        "version": resolved_version,
+        "source_alias": source_alias,
+        "target_alias": target_alias,
+        "promoted": True,
+    }
+
+
 def promote_model_version(source_model: str, target_model: str, *, version: int | None = None, alias: str | None = "champion"):
     """Copy one model version from source to target and optionally set alias on target."""
     result = _deploy_model(
@@ -237,6 +357,152 @@ def promote_model_version(source_model: str, target_model: str, *, version: int 
         dry_run=False,
     )
     return result
+
+
+def smoke_test_table(
+    *,
+    spark,
+    table_name: str,
+    required_columns: list[str] | None = None,
+    min_rows: int = 1,
+) -> dict[str, Any]:
+    exists = bool(spark.catalog.tableExists(table_name))
+    row_count = None
+    missing_columns: list[str] = []
+    passed = False
+    error = None
+
+    try:
+        if exists:
+            df = spark.table(table_name)
+            cols = set(df.columns)
+            if required_columns:
+                missing_columns = [c for c in required_columns if c not in cols]
+            row_count = df.limit(max(min_rows, 1)).count() if min_rows > 0 else 0
+            enough_rows = (row_count >= min_rows) if min_rows > 0 else True
+            passed = enough_rows and (len(missing_columns) == 0)
+        else:
+            passed = False
+    except Exception as e:
+        error = str(e)
+        passed = False
+
+    return {
+        "type": "table",
+        "target": table_name,
+        "exists": exists,
+        "row_count_sample": row_count,
+        "missing_columns": missing_columns,
+        "min_rows": min_rows,
+        "passed": passed,
+        "error": error,
+    }
+
+
+def smoke_test_model(
+    *,
+    model_name: str,
+    version: int | None = None,
+    alias: str | None = "champion",
+    required_signature: bool = True,
+    sample_input=None,
+) -> dict[str, Any]:
+    try:
+        validation = validate_candidate(
+            model_name,
+            version=version,
+            alias=alias,
+            required_signature=required_signature,
+            sample_input=sample_input,
+        )
+        return {
+            "type": "model",
+            "target": model_name,
+            "version": validation["version"],
+            "alias": alias,
+            "passed": bool(validation["passed"]),
+            "checks": validation["checks"],
+            "error": validation.get("sample_error"),
+        }
+    except Exception as e:
+        return {
+            "type": "model",
+            "target": model_name,
+            "version": version,
+            "alias": alias,
+            "passed": False,
+            "checks": {},
+            "error": str(e),
+        }
+
+
+def smoke_test_report(
+    *,
+    report_path: str,
+    min_size_bytes: int = 1,
+) -> dict[str, Any]:
+    exists = os.path.exists(report_path)
+    size = os.path.getsize(report_path) if exists else 0
+    passed = exists and (size >= int(min_size_bytes))
+    return {
+        "type": "report",
+        "target": report_path,
+        "exists": exists,
+        "size_bytes": size,
+        "min_size_bytes": min_size_bytes,
+        "passed": passed,
+        "error": None if passed else "report missing or below minimum size",
+    }
+
+
+def run_deploy_smoke_tests(
+    *,
+    spark,
+    deploy_plan: dict[str, Any],
+    required_columns_by_table: dict[str, list[str]] | None = None,
+    min_rows_by_table: dict[str, int] | None = None,
+    model_alias: str = "champion",
+    report_min_size_bytes: int = 1,
+) -> dict[str, Any]:
+    required_columns_by_table = required_columns_by_table or {}
+    min_rows_by_table = min_rows_by_table or {}
+
+    results: list[dict[str, Any]] = []
+
+    for t in deploy_plan.get("tables", []):
+        target = t["target"]
+        results.append(
+            smoke_test_table(
+                spark=spark,
+                table_name=target,
+                required_columns=required_columns_by_table.get(target),
+                min_rows=min_rows_by_table.get(target, 1),
+            )
+        )
+
+    for r in deploy_plan.get("reports", []):
+        results.append(
+            smoke_test_report(
+                report_path=r["target"],
+                min_size_bytes=report_min_size_bytes,
+            )
+        )
+
+    model_plan = deploy_plan.get("model")
+    if model_plan and model_plan.get("target_model"):
+        results.append(
+            smoke_test_model(
+                model_name=model_plan["target_model"],
+                alias=model_alias,
+                required_signature=True,
+            )
+        )
+
+    passed = all(bool(x.get("passed")) for x in results) if results else True
+    return {
+        "passed": passed,
+        "results": results,
+    }
 
 
 def _copy_report_if_exists(src: Path, dst: Path, dry_run: bool) -> bool:
@@ -325,6 +591,10 @@ def deploy(
     clone_mode: str = "DEEP",
     model_version: int | None = None,
     model_alias: str | None = "champion",
+    run_smoke_tests: bool = False,
+    required_columns_by_table: dict[str, list[str]] | None = None,
+    min_rows_by_table: dict[str, int] | None = None,
+    report_min_size_bytes: int = 1,
 ) -> dict[str, Any]:
     """
     Promote assets for a given subject + analysis.
@@ -420,6 +690,16 @@ def deploy(
             model_version=model_version,
             model_alias=model_alias,
             dry_run=dry_run,
+        )
+
+    if run_smoke_tests and (not dry_run):
+        plan["smoke_tests"] = run_deploy_smoke_tests(
+            spark=spark,
+            deploy_plan=plan,
+            required_columns_by_table=required_columns_by_table,
+            min_rows_by_table=min_rows_by_table,
+            model_alias=model_alias or "champion",
+            report_min_size_bytes=report_min_size_bytes,
         )
 
     return plan

@@ -33,6 +33,12 @@ import pandas as pd
 import numpy as np
 from pyspark.sql import functions as F
 from mlflow.models.signature import infer_signature
+from models.utils import register_candidate, validate_candidate, promote_alias
+
+# Model governance controls
+MODEL_CANDIDATE_ALIAS = "challenger"
+MODEL_PROD_ALIAS = "champion"
+AUTO_PROMOTE_CHAMPION_IN_TRAINING = False
 
 # COMMAND ----------
 
@@ -227,6 +233,44 @@ def learn_X_into_pipeline(analysis: str,
             input_example=X_example,
             signature=signature
         )
+
+        run_id = mlflow.active_run().info.run_id
+        candidate = register_candidate(
+            model_name=model_name,
+            run_id=run_id,
+            alias=MODEL_CANDIDATE_ALIAS,
+            tags={
+                "analysis": analysis_name,
+                "governance_status": "candidate",
+            },
+        )
+        validation = validate_candidate(
+            model_name=model_name,
+            alias=MODEL_CANDIDATE_ALIAS,
+            required_signature=True,
+            sample_input=X_example,
+        )
+        if not validation["passed"]:
+            raise ValueError(
+                f"Model candidate validation failed for {model_name} "
+                f"(version={candidate['version']}): {validation}"
+            )
+
+        if AUTO_PROMOTE_CHAMPION_IN_TRAINING:
+            promote_alias(
+                model_name=model_name,
+                source_alias=MODEL_CANDIDATE_ALIAS,
+                target_alias=MODEL_PROD_ALIAS,
+            )
+            print(
+                f"Promoted alias {MODEL_PROD_ALIAS} for {model_name} "
+                f"from {MODEL_CANDIDATE_ALIAS} (version={candidate['version']})."
+            )
+        else:
+            print(
+                f"Registered/validated candidate for {model_name}: "
+                f"alias={MODEL_CANDIDATE_ALIAS}, version={candidate['version']}."
+            )
 
     return pipeline, X, ml_parameters, user_ids
 
