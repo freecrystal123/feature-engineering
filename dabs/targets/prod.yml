@@ -1,0 +1,14 @@
+targets:
+  prod:
+    mode: production
+    presets:
+      name_prefix: "[PROD] "
+      tags:
+        deployment: prod
+        project: falaj-machine-learning
+    workspace:
+      host: https://adb-1817635743983490.10.azuredatabricks.net/
+      root_path: /Workspace/falaj-machine-learning/prod
+    variables:
+      environment: prod
+      analysis_cluster_id: 1103-212813-x7lxbe2j

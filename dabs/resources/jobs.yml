@@ -1,0 +1,33 @@
+resources:
+  jobs:
+    ml_user_segmentation_pipeline:
+      name: ml_user_segmentation_pipeline
+      tasks:
+        - task_key: user_segmentation
+          spark_python_task:
+            python_file: ${workspace.file_path}/models/user_segmentation/segmentation_pipeline.py
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
+    ml_cross_sell_mba_training:
+      name: ml_cross_sell_mba_training
+      tasks:
+        - task_key: mba_feature_engineering
+          spark_python_task:
+            python_file: ${workspace.file_path}/models/cross_sell_mba/01_mba_features.py
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: mba_model_training
+          depends_on:
+            - task_key: mba_feature_engineering
+          spark_python_task:
+            python_file: ${workspace.file_path}/models/cross_sell_mba/02_mba_model_training.py
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: mba_reports
+          depends_on:
+            - task_key: mba_model_training
+          spark_python_task:
+            python_file: ${workspace.file_path}/models/cross_sell_mba/03_mba_reports.py
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true

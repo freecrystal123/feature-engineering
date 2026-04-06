@@ -1,0 +1,14 @@
+bundle:
+  name: falaj-machine-learning
+
+variables:
+  environment:
+    description: Environment name
+    default: uat
+  analysis_cluster_id:
+    description: Existing cluster id for Falaj Analysis cluster
+    default: 1103-212813-x7lxbe2j
+
+include:
+  - dabs/targets/*.yml
+  - dabs/resources/*.yml

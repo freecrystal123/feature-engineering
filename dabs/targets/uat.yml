@@ -1,0 +1,14 @@
+targets:
+  uat:
+    presets:
+      name_prefix: "[UAT] "
+      trigger_pause_status: PAUSED
+      tags:
+        deployment: uat
+        project: falaj-machine-learning
+    workspace:
+      host: https://adb-1817635743983490.10.azuredatabricks.net/
+      root_path: /Workspace/falaj-machine-learning/uat
+    variables:
+      environment: uat
+      analysis_cluster_id: 1103-212813-x7lxbe2j
