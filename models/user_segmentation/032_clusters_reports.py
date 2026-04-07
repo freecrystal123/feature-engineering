@@ -1169,16 +1169,16 @@ def get_html_cluster_detailed_information(analysis: str):
     wager_stake_col = "wager_amount"
 
     dim_wager = spark.table(DIM_WAGER)
-    deposit = spark.table(T_DEPOSIT)
-    withdraw = spark.table(T_WITHDRAW)
-    user = spark.table(T_USER)
+    deposit = spark.table(FACT_DEPOSIT)
+    withdraw = spark.table(FACT_WITHDRAWAL)
+    user = spark.table(DIM_USER)
     dim_coupon = spark.table(DIM_COUPON)
     dim_game = spark.table(DIM_GAME)
-    settled_wager = spark.table(T_SETTLED_WAGER)
-    rtp = spark.table(T_RTP)
+    settled_wager = spark.table(FACT_SETTLED_WAGER)
+    rtp = spark.table(FACT_RTP)
 
-    wager = spark.table(T_WAGER)
-    # wager = spark.table(T_WAGER).limit(10)
+    wager = spark.table(FACT_WAGER)
+    # wager = spark.table(FACT_WAGER).limit(10)
     wager = (
         wager
             .filter(F.to_date(wager_time_col) >= first_start_analysis)

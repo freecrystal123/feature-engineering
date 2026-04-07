@@ -26,10 +26,10 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
 
 # COMMAND ----------
 
-settled_wager = spark.table(T_SETTLED_WAGER)
+settled_wager = spark.table(FACT_SETTLED_WAGER)
 dim_wager = spark.table(DIM_WAGER)
 dim_game = spark.table(DIM_GAME)
-user = spark.table(T_USER)
+user = spark.table(DIM_USER)
 wager_history = spark.table("prod_silver.wager.wager_history")
 dim_sport_type = spark.table("prod_creative.shared.dim_sport_type")
 

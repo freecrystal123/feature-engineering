@@ -33,11 +33,11 @@ first_start_analysis = F.date_sub(current_date, GENERAL_DAYS_BEFORE)
 
 # COMMAND ----------
 
-wager = spark.table(T_WAGER)
+wager = spark.table(FACT_WAGER)
 dim_wager = spark.table(DIM_WAGER)
-deposit = spark.table(T_DEPOSIT)
-withdraw = spark.table(T_WITHDRAW)
-user = spark.table(T_USER)
+deposit = spark.table(FACT_DEPOSIT)
+withdraw = spark.table(FACT_WITHDRAWAL)
+user = spark.table(DIM_USER)
 dim_coupon = spark.table(DIM_COUPON)
 dim_game = spark.table(DIM_GAME)
 

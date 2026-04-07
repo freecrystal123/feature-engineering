@@ -67,15 +67,15 @@ WRITE_CATALOG = f"{WRITE_ENVIRONMENT}_analytics"
 REPORTS_FOLDER_NAME = "reports"
 
 # Shared source tables
-T_WAGER = f"{READ_GOLD_DB}.finance.fact_wager"
-T_SETTLED_WAGER = f"{READ_GOLD_DB}.finance.fact_settled_wager"
-T_RTP = f"{READ_GOLD_DB}.finance.fact_rtp"
+FACT_WAGER = f"{READ_GOLD_DB}.finance.fact_wager"
+FACT_SETTLED_WAGER = f"{READ_GOLD_DB}.finance.fact_settled_wager"
+FACT_RTP = f"{READ_GOLD_DB}.finance.fact_rtp"
 DIM_WAGER = f"{READ_GOLD_DB}.shared.dim_wager"
-T_DEPOSIT = f"{READ_GOLD_DB}.finance.fact_deposit"
-T_WITHDRAW = f"{READ_GOLD_DB}.finance.fact_withdrawal"
+FACT_DEPOSIT = f"{READ_GOLD_DB}.finance.fact_deposit"
+FACT_WITHDRAWAL = f"{READ_GOLD_DB}.finance.fact_withdrawal"
 DIM_COUPON = f"{READ_GOLD_DB}.shared.dim_coupon"
 DIM_GAME = f"{READ_GOLD_DB}.shared.dim_game"
-T_USER = f"{READ_GOLD_DB}.shared.dim_user"
+DIM_USER = f"{READ_GOLD_DB}.shared.dim_user"
 
 REFERENCE_DATA_STATUS = f"{READ_SILVER_DB}.reference_data.status_master"
 
