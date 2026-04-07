@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 from typing import Any
 import os
+import re
 from uuid import uuid4
 
 
@@ -57,6 +58,49 @@ def _mlflow_client():
     from mlflow import MlflowClient
 
     return MlflowClient()
+
+
+def normalize_environment(value: str | None) -> str | None:
+    if not value:
+        return None
+    v = str(value).strip().lower()
+    if v in {"dev", "uat", "prod"}:
+        return v
+    m = re.search(r"/(dev|uat|prod)(?:/|$)", v)
+    if m:
+        return m.group(1)
+    return None
+
+
+def detect_environment(default: str = "uat") -> str:
+    # 1) Prefer explicit ENVIRONMENT variable (e.g., passed in Databricks Jobs).
+    env = normalize_environment(os.getenv("ENVIRONMENT"))
+    if env:
+        return env
+
+    # 2) Detect from Databricks notebook path (workspace root_path contains /uat or /prod).
+    try:
+        dbutils_obj = globals().get("dbutils")
+        if dbutils_obj is not None:
+            notebook_path = (
+                dbutils_obj.notebook.entry_point.getDbutils()
+                .notebook()
+                .getContext()
+                .notebookPath()
+                .get()
+            )
+            env = normalize_environment(notebook_path)
+            if env:
+                return env
+    except Exception:
+        pass
+
+    # 3) Fallback to process working directory path.
+    env = normalize_environment(os.getcwd())
+    if env:
+        return env
+
+    return default
 
 
 def snapshot_table_name(table_base: str) -> str:
