@@ -635,6 +635,9 @@ def deploy(
     clone_mode: str = "DEEP",
     model_version: int | None = None,
     model_alias: str | None = "champion",
+    deploy_tables: bool = False,
+    deploy_reports: bool = False,
+    deploy_model: bool = True,
     run_smoke_tests: bool = False,
     required_columns_by_table: dict[str, list[str]] | None = None,
     min_rows_by_table: dict[str, int] | None = None,
@@ -659,6 +662,8 @@ def deploy(
         "DEEP" or "SHALLOW" for Delta clone. (deep is everything, shallow is metadata-only)
     model_version/model_alias:
         Optional model selector. If version is provided, it takes precedence.
+    deploy_tables/deploy_reports/deploy_model:
+        Select which assets to promote. Default promotes model only.
     """
     subject = subject.strip()
     if subject not in SUBJECT_SPECS:
@@ -668,6 +673,8 @@ def deploy(
     clone_mode = clone_mode.upper().strip()
     if clone_mode not in {"DEEP", "SHALLOW"}:
         raise ValueError("clone_mode must be DEEP or SHALLOW")
+    if not any([deploy_tables, deploy_reports, deploy_model]):
+        raise ValueError("At least one of deploy_tables, deploy_reports, deploy_model must be True.")
 
     source_schema = f"{source_catalog}.{spec.schema}"
     target_schema = f"{target_catalog}.{spec.schema}"
@@ -678,53 +685,61 @@ def deploy(
         "source_schema": source_schema,
         "target_schema": target_schema,
         "dry_run": dry_run,
+        "selected_assets": {
+            "tables": bool(deploy_tables),
+            "reports": bool(deploy_reports),
+            "model": bool(deploy_model),
+        },
         "tables": [],
         "reports": [],
         "model": None,
     }
 
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
+    if (deploy_tables or deploy_reports) and (not dry_run):
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
 
     # Tables
-    for template in spec.table_templates:
-        src_table = f"{source_schema}.{template.format(analysis=analysis_name)}"
-        dst_table = f"{target_schema}.{template.format(analysis=analysis_name)}"
-        exists = bool(spark.catalog.tableExists(src_table))
+    if deploy_tables:
+        for template in spec.table_templates:
+            src_table = f"{source_schema}.{template.format(analysis=analysis_name)}"
+            dst_table = f"{target_schema}.{template.format(analysis=analysis_name)}"
+            exists = bool(spark.catalog.tableExists(src_table))
 
-        item = {
-            "source": src_table,
-            "target": dst_table,
-            "exists": exists,
-            "executed": False,
-        }
+            item = {
+                "source": src_table,
+                "target": dst_table,
+                "exists": exists,
+                "executed": False,
+            }
 
-        if exists and not dry_run:
-            spark.sql(f"CREATE OR REPLACE TABLE {dst_table} {clone_mode} CLONE {src_table}")
-            item["executed"] = True
+            if exists and not dry_run:
+                spark.sql(f"CREATE OR REPLACE TABLE {dst_table} {clone_mode} CLONE {src_table}")
+                item["executed"] = True
 
-        plan["tables"].append(item)
+            plan["tables"].append(item)
 
     # Reports
-    src_report_dir = Path(f"/Volumes/{source_catalog}/{spec.schema}/{spec.report_folder}")
-    dst_report_dir = Path(f"/Volumes/{target_catalog}/{spec.schema}/{spec.report_folder}")
+    if deploy_reports:
+        src_report_dir = Path(f"/Volumes/{source_catalog}/{spec.schema}/{spec.report_folder}")
+        dst_report_dir = Path(f"/Volumes/{target_catalog}/{spec.schema}/{spec.report_folder}")
 
-    for report_tpl in spec.report_templates:
-        report_name = report_tpl.format(analysis=analysis_name)
-        src = src_report_dir / report_name
-        dst = dst_report_dir / report_name
-        copied_or_planned = _copy_report_if_exists(src, dst, dry_run=dry_run)
-        plan["reports"].append(
-            {
-                "source": str(src),
-                "target": str(dst),
-                "exists": src.exists(),
-                "executed": copied_or_planned and (not dry_run),
-                "planned": copied_or_planned and dry_run,
-            }
-        )
+        for report_tpl in spec.report_templates:
+            report_name = report_tpl.format(analysis=analysis_name)
+            src = src_report_dir / report_name
+            dst = dst_report_dir / report_name
+            copied_or_planned = _copy_report_if_exists(src, dst, dry_run=dry_run)
+            plan["reports"].append(
+                {
+                    "source": str(src),
+                    "target": str(dst),
+                    "exists": src.exists(),
+                    "executed": copied_or_planned and (not dry_run),
+                    "planned": copied_or_planned and dry_run,
+                }
+            )
 
     # Model
-    if spec.model_template:
+    if deploy_model and spec.model_template:
         model_name = spec.model_template.format(analysis=analysis_name)
         source_model = f"{source_schema}.{model_name}"
         target_model = f"{target_schema}.{model_name}"
