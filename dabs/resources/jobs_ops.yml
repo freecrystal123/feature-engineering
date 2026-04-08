@@ -1,0 +1,48 @@
+resources:
+  jobs:
+    evaluator_validate:
+      name: evaluator_validate
+      tags:
+        job_type: ops
+        flow: evaluator
+      tasks:
+        - task_key: evaluator_validate
+          notebook_task:
+            notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_validate.py
+            source: WORKSPACE
+            base_parameters:
+              subject: user_segmentation
+              analysis_name: analysis_1
+              model_catalog: uat_analytics
+              candidate_alias: challenger
+              required_signature: "true"
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
+    evaluator_deploy:
+      name: evaluator_deploy
+      tags:
+        job_type: ops
+        flow: evaluator
+      tasks:
+        - task_key: evaluator_deploy
+          notebook_task:
+            notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_deploy.py
+            source: WORKSPACE
+            base_parameters:
+              subject: user_segmentation
+              analysis_name: analysis_1
+              source_catalog: uat_analytics
+              target_catalog: prod_analytics
+              source_alias: challenger
+              target_alias: champion
+              promote_first: "true"
+              dry_run: "false"
+              deploy_model: "true"
+              deploy_tables: "false"
+              deploy_reports: "false"
+              run_smoke_tests: "true"
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
