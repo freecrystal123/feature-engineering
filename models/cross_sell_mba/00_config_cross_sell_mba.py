@@ -2,6 +2,9 @@
 # MAGIC %run ../00_config
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 # Domain-specific settings
 SUBJECT_NAME = "cross_sell_mba"

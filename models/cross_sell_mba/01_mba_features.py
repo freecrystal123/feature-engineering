@@ -14,10 +14,12 @@
 # MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.sql import DataFrame
-from models.utils import publish_table, read_current_table
 
 # COMMAND ----------
 

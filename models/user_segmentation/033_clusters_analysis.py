@@ -6,6 +6,9 @@
 # MAGIC %run ./00_llm_utils
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 # MAGIC %sql
 # MAGIC select * from uat_analytics.user_segmentation.cluster_online_live_casino_ap2
@@ -30,7 +33,7 @@ rename_pca("analysis_6", old_name="Loss Dominance", new_name="Loss-Weighted", ne
 
 from pyspark.sql import functions as F
 import numpy as np
-from models.utils import get_model as get_registered_model
+get_registered_model = get_model
 
 # COMMAND ----------
 
@@ -297,14 +300,23 @@ if analysis_column_2 == "":
 
 
 base = (
-    spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+    read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
     .join(
-        spark.table(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}"),
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}",
+        ),
         on="unique_user_id",
         how="inner",
     )
     .join(
-        spark.table(f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}"),
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}",
+        ),
         on="cluster_id",
         how="inner",
     )

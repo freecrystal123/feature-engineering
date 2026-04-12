@@ -15,10 +15,12 @@
 # MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 from pyspark.sql import functions as F
 from html import escape
-from models.utils import read_current_table
 
 # COMMAND ----------
 
@@ -543,10 +545,9 @@ body {{
 # COMMAND ----------
 
 report_path = f"{REPORT_DIR}/mba_rules_report_{analysis_name}.html"
-with open(report_path, "w") as f:
-    f.write(html)
-
-print(f"Report saved into {report_path}")
+saved = write_report_with_single_backup(report_path, html)
+print(f"Report saved into {saved['report_path']}")
+print(f"Backup saved into {saved['backup_path']}")
 
 # COMMAND ----------
 

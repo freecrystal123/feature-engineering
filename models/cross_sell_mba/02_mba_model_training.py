@@ -15,14 +15,30 @@
 # MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.ml.fpm import FPGrowth
-from models.utils import publish_table, read_current_table
+import mlflow
 
 # COMMAND ----------
 
 analysis_name = ANALYSIS_NAMES[MBA_ANALYSIS]
+mlflow.start_run(run_name=f"mba_rules_{analysis_name}")
+mlflow.log_params(
+    {
+        "subject": SUBJECT_NAME,
+        "analysis_id": MBA_ANALYSIS,
+        "analysis_name": analysis_name,
+        "lookback_days_list": ",".join(str(x) for x in MBA_LOOKBACK_DAYS_LIST),
+        "min_support": float(MBA_MIN_SUPPORT),
+        "min_confidence": float(MBA_MIN_CONFIDENCE),
+        "min_lift": float(MBA_MIN_LIFT),
+        "top_rules": int(MBA_TOP_RULES),
+    }
+)
 transactions = read_current_table(
     spark=spark,
     table_base=f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}",
@@ -356,6 +372,21 @@ print(
     f"Published rules tables (lookbacks={MBA_LOOKBACK_DAYS_LIST}, run_id={rules_publish['run_id']}): "
     f"{rules_publish['current_table']}, {cross_publish['current_table']}, {focus_publish['current_table']}"
 )
+mlflow.log_params(
+    {
+        "published_rules_current": rules_publish["current_table"],
+        "published_cross_current": cross_publish["current_table"],
+        "published_focus_current": focus_publish["current_table"],
+    }
+)
+mlflow.log_metrics(
+    {
+        "rules_rows": float(all_rules.count()),
+        "cross_rules_rows": float(all_cross_rules.count()),
+        "focus_rules_rows": float(all_focus_rules.count()),
+    }
+)
+mlflow.end_run()
 
 # COMMAND ----------
 

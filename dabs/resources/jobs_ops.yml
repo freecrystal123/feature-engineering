@@ -8,7 +8,7 @@ resources:
       tasks:
         - task_key: evaluator_validate
           notebook_task:
-            notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_validate.py
+            notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_validate
             source: WORKSPACE
             base_parameters:
               subject: user_segmentation
@@ -28,7 +28,7 @@ resources:
       tasks:
         - task_key: evaluator_deploy
           notebook_task:
-            notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_deploy.py
+            notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_deploy
             source: WORKSPACE
             base_parameters:
               subject: user_segmentation

@@ -2,6 +2,9 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 import pandas as pd
 from sklearn.metrics import silhouette_score
@@ -10,7 +13,10 @@ from sklearn.metrics import silhouette_score
 
 def get_prediction(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    spark_df = spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+    spark_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
 
     return spark_df
 
@@ -54,11 +60,18 @@ def save_evaluated_score(analysis_id, analysis_name, kmeans_k, pca_k, sil_score)
         ["analysis_id", "analysis_name", "kmeans_k", "pca_k", "sil_score"]
     ).withColumn("created_at", F.current_timestamp())
 
-    (
-        df.write
-        .format("delta")
-        .mode("append")
-        .saveAsTable(T_GOLD_CUSTOMER_EVAL_SCORE)
+    try:
+        current_df = read_current_table(spark=spark, table_base=T_GOLD_CUSTOMER_EVAL_SCORE)
+        combined_df = current_df.unionByName(df, allowMissingColumns=True)
+    except Exception:
+        combined_df = df
+
+    publish_table(
+        spark=spark,
+        df=combined_df,
+        table_base=T_GOLD_CUSTOMER_EVAL_SCORE,
+        analysis_name=analysis_name,
+        current_mode="table",
     )
 
 # COMMAND ----------

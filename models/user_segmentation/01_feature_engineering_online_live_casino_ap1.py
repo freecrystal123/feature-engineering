@@ -7,6 +7,9 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 from pyspark.sql import functions as F, Window
 from pyspark.sql.types import NumericType
@@ -672,11 +675,16 @@ def get_all_features(analysis: str):
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
 
 features = get_all_features(ANALYSIS_ID)
-(
-    features
-    .withColumn("created_at", F.current_timestamp())
-    .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-    .saveAsTable(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{ANALYSIS_NAME}")
+publish_result = publish_table(
+    spark=spark,
+    df=features.withColumn("created_at", F.current_timestamp()),
+    table_base=f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{ANALYSIS_NAME}",
+    analysis_name=ANALYSIS_NAME,
+    current_mode="table",
+)
+print(
+    f"Published features: {publish_result['snapshot_table']} and "
+    f"{publish_result['current_table']} (run_id={publish_result['run_id']})"
 )
 
 # for analysis, analysis_name in ANALYSIS_NAMES.items():

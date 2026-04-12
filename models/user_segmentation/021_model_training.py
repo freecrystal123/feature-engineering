@@ -7,6 +7,9 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 # MAGIC %run ./022_evaluation 
 
@@ -33,8 +36,6 @@ import pandas as pd
 import numpy as np
 from pyspark.sql import functions as F
 from mlflow.models.signature import infer_signature
-from models.utils import register_candidate, validate_candidate, promote_alias
-
 # Model governance controls
 MODEL_CANDIDATE_ALIAS = "challenger"
 MODEL_PROD_ALIAS = "champion"
@@ -49,7 +50,10 @@ AUTO_PROMOTE_CHAMPION_IN_TRAINING = False
 
 def get_X_for_fitting(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    spark_df = spark.table(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}")
+    spark_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}",
+    )
                     
 
     
@@ -141,7 +145,7 @@ def get_best_value_kmeans_k(
     """
 
     eval_df = (
-        spark.table(f"{T_GOLD_CUSTOMER_EVAL_SCORE}")
+        read_current_table(spark=spark, table_base=f"{T_GOLD_CUSTOMER_EVAL_SCORE}")
         .filter(F.col("analysis_id") == F.lit(analysis))
         .filter((F.col("kmeans_k") >= F.lit(min_reasonable_k)) & (F.col("kmeans_k") <= F.lit(max_k)))
         .select("kmeans_k", "sil_score", "pca_k")
@@ -338,18 +342,25 @@ def train_predict_analysis(analysis: str, ml_parameters={"kmeans_k":FIXED_KMEANS
     pca_spark = spark.createDataFrame(pca_components)
     predict_spark = spark.createDataFrame(predict_df)
     
-    (
-        pca_spark
-        .withColumn("created_at", F.current_timestamp())
-        .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-        .saveAsTable(f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}")
+    pca_publish = publish_table(
+        spark=spark,
+        df=pca_spark.withColumn("created_at", F.current_timestamp()),
+        table_base=f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}",
+        analysis_name=analysis_name,
+        current_mode="table",
     )
 
-    (
-        predict_spark
-        .withColumn("created_at", F.current_timestamp())
-        .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-        .saveAsTable(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+    pred_publish = publish_table(
+        spark=spark,
+        df=predict_spark.withColumn("created_at", F.current_timestamp()),
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+        analysis_name=analysis_name,
+        run_id=pca_publish["run_id"],
+        current_mode="table",
+    )
+    print(
+        f"Published prediction outputs: {pca_publish['current_table']}, {pred_publish['current_table']} "
+        f"(run_id={pca_publish['run_id']})"
     )
 
     return new_pca_k
@@ -386,7 +397,11 @@ def evaluate_missing_k(analysis: str):
 
     if spark.catalog.tableExists(T_GOLD_CUSTOMER_EVAL_SCORE):
         processed_kmeans_ks = set(
-            row["kmeans_k"] for row in spark.table(T_GOLD_CUSTOMER_EVAL_SCORE).filter(F.col("analysis_id") == analysis).select("kmeans_k").distinct().collect()
+            row["kmeans_k"]
+            for row in read_current_table(
+                spark=spark,
+                table_base=T_GOLD_CUSTOMER_EVAL_SCORE,
+            ).filter(F.col("analysis_id") == analysis).select("kmeans_k").distinct().collect()
         )
     else:
         processed_kmeans_ks = set()
@@ -430,13 +445,13 @@ import matplotlib.pyplot as plt
 def plot_silhouette_by_k(analysis: str, agg: str = "max", limit_k: int | None = None, y_pad_ratio: float = 0.05):
 
     df = (
-        spark.table(f"{T_GOLD_CUSTOMER_EVAL_SCORE}")
-            .filter(F.col("analysis_id") == analysis)
-            .select(
-                F.col("kmeans_k").cast("int").alias("k_means_k"),
-                F.col("sil_score").cast("double").alias("sil_score")
-            )
-            .filter(F.col("k_means_k").isNotNull() & F.col("sil_score").isNotNull())
+        read_current_table(spark=spark, table_base=f"{T_GOLD_CUSTOMER_EVAL_SCORE}")
+        .filter(F.col("analysis_id") == analysis)
+        .select(
+            F.col("kmeans_k").cast("int").alias("k_means_k"),
+            F.col("sil_score").cast("double").alias("sil_score")
+        )
+        .filter(F.col("k_means_k").isNotNull() & F.col("sil_score").isNotNull())
     )
 
     if limit_k is not None:

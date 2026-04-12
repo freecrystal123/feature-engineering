@@ -2,6 +2,9 @@
 # MAGIC %run ../00_config
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 # Domain-specific settings
 SUBJECT_NAME = "user_segmentation"
@@ -61,31 +64,49 @@ ANALYSIS_FILTERS = {
 
 def get_features_table(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    return spark.table(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}")
+    return read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}",
+    )
 
 
 def get_pca_table(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    return spark.table(f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}")
+    return read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}",
+    )
 
 
 def get_predicted_table(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    return spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+    return read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
 
 
 def get_eval_score_table():
-    return spark.table(f"{T_GOLD_CUSTOMER_EVAL_SCORE}")
+    return read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_EVAL_SCORE}",
+    )
 
 
 def get_clusters_table(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    return spark.table(f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}")
+    return read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}",
+    )
 
 
 def get_suggestions_table(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    return spark.table(f"{T_GOLD_CUSTOMER_SUGGESTIONS_PREFIX}_{analysis_name}")
+    return read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_SUGGESTIONS_PREFIX}_{analysis_name}",
+    )
 
 
 # COMMAND ----------

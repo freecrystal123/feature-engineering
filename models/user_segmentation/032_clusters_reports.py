@@ -2,6 +2,9 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 import numpy as np
 import pandas as pd
@@ -29,10 +32,10 @@ def get_pca_metadata(analysis: str) -> dict:
 
     pca_table = f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}"
 
-    pca_df = (
-        spark.table(pca_table)
-        .select("pca_id", "pca_component_name", "pca_component_description")
-    )
+    pca_df = read_current_table(
+        spark=spark,
+        table_base=pca_table,
+    ).select("pca_id", "pca_component_name", "pca_component_description")
 
     # Map: pca_id -> {name, description}
     pca_meta_map = {
@@ -50,7 +53,7 @@ def get_pca_basic_info(analysis:str):
     analysis_name = ANALYSIS_NAMES[analysis]
     pca_table = f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}"
 
-    pca_df = spark.table(pca_table).drop("pca_component_name", "pca_component_description")
+    pca_df = read_current_table(spark=spark, table_base=pca_table).drop("pca_component_name", "pca_component_description")
 
     return pca_df
 
@@ -61,18 +64,26 @@ def get_feature_cols_from_features_table(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
     features_table = f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}"
 
-    df = spark.table(features_table)
+    df = read_current_table(spark=spark, table_base=features_table)
 
     exclude = {
         "unique_user_id",
         "created_at",
+        "run_id",
+        "run_ts",
+        "ref_date",
+        "analysis_name",
         # extras defensivos (não atrapalham se não existirem)
         "cluster_id",
         "pca_id",
         "rfm_segment",
     }
 
-    feature_cols = [c for c in df.columns if c not in exclude]
+    numeric_types = {"double", "float", "int", "bigint", "smallint", "tinyint", "decimal", "long"}
+    feature_cols = [
+        c for c, t in df.dtypes
+        if (c not in exclude) and any(t.lower().startswith(nt) for nt in numeric_types)
+    ]
     return feature_cols
 
 # COMMAND ----------
@@ -158,17 +169,19 @@ def save_report(analysis: str, html: str, report_name: str):
 
     report_path = f"{REPORT_DIR}/{report_name}_{analysis_name}.html"
 
-    print(f"Report saved into {report_path}")
-    # 1) salvar HTML
-    with open(report_path, "w") as f:
-        f.write(html)
+    saved = write_report_with_single_backup(report_path, html)
+    print(f"Report saved into {saved['report_path']}")
+    print(f"Backup saved into {saved['backup_path']}")
 
 # COMMAND ----------
 
 def get_pca_profile_df(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
 
-    pred_df = spark.table(f'{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}')
+    pred_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
 
     pca_cols = [c for c in pred_df.columns if c.startswith("pca_")]
 
@@ -271,7 +284,10 @@ def get_cluster_radial_profiles(analysis: str):
     labels = [pca_metadata[l]["name"] for l in labels]
 
     clusters_data = (
-        spark.table(f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}")
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}",
+        )
         .select(
             "cluster_id",
             # F.col("cluster_name"),
@@ -504,7 +520,10 @@ def get_html_cluster_general_information(analysis: str):
     # Cluster metadata
     # ======================================================
     clusters_data = (
-        spark.table(f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}")
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}",
+        )
         .select(
             "cluster_id",
             F.col("cluster_name_refined").alias("cluster_name"),
@@ -548,7 +567,10 @@ def get_html_cluster_general_information(analysis: str):
     # den = (maxs - mins).replace(0, np.nan)
     # vals_norm = ((vals - mins) / den).fillna(0.0)
 
-    pred_df = spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+    pred_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
 
     # Build quantile grid once (0..100%)
     probs = [i / 100 for i in range(101)]
@@ -1267,7 +1289,10 @@ def get_html_cluster_detailed_information(analysis: str):
     # Load cluster assignments + cluster metadata
     # ======================================================
     predicted_df = (
-        spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+        )
         .select(
             F.col("unique_user_id").cast("string").alias("unique_user_id"),
             F.col("cluster_id")
@@ -1276,7 +1301,10 @@ def get_html_cluster_detailed_information(analysis: str):
     )
 
     clusters_meta_df = (
-        spark.table(f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}")
+        read_current_table(
+            spark=spark,
+            table_base=f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}",
+        )
         .select(
             "cluster_id",
             F.col("cluster_name_refined").alias("cluster_name"),

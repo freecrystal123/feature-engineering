@@ -1,3 +1,5 @@
+# Databricks notebook source
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +11,8 @@ import re
 from uuid import uuid4
 
 
+# COMMAND ----------
+
 @dataclass(frozen=True)
 class SubjectSpec:
     schema: str
@@ -17,6 +21,8 @@ class SubjectSpec:
     model_template: str | None = None
     report_templates: tuple[str, ...] = ()
 
+
+# COMMAND ----------
 
 SUBJECT_SPECS: dict[str, SubjectSpec] = {
     "user_segmentation": SubjectSpec(
@@ -54,11 +60,15 @@ SUBJECT_SPECS: dict[str, SubjectSpec] = {
 }
 
 
+# COMMAND ----------
+
 def _mlflow_client():
     from mlflow import MlflowClient
 
     return MlflowClient()
 
+
+# COMMAND ----------
 
 def normalize_environment(value: str | None) -> str | None:
     if not value:
@@ -71,6 +81,8 @@ def normalize_environment(value: str | None) -> str | None:
         return m.group(1)
     return None
 
+
+# COMMAND ----------
 
 def detect_environment(default: str = "uat") -> str:
     # 1) Prefer explicit ENVIRONMENT variable (e.g., passed in Databricks Jobs).
@@ -103,13 +115,19 @@ def detect_environment(default: str = "uat") -> str:
     return default
 
 
+# COMMAND ----------
+
 def snapshot_table_name(table_base: str) -> str:
     return f"{table_base}_snapshot"
 
 
+# COMMAND ----------
+
 def current_table_name(table_base: str) -> str:
     return f"{table_base}_current"
 
+
+# COMMAND ----------
 
 def _table_schema_name(table_name: str) -> str:
     parts = table_name.split(".")
@@ -118,15 +136,21 @@ def _table_schema_name(table_name: str) -> str:
     return ".".join(parts[:-1])
 
 
+# COMMAND ----------
+
 def _ensure_schema(spark, table_name: str) -> None:
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {_table_schema_name(table_name)}")
 
+
+# COMMAND ----------
 
 def _with_col_if_missing(df, col_name: str, expr):
     if col_name in df.columns:
         return df
     return df.withColumn(col_name, expr)
 
+
+# COMMAND ----------
 
 def publish_table(
     *,
@@ -189,6 +213,8 @@ def publish_table(
     }
 
 
+# COMMAND ----------
+
 def read_current_table(*, spark, table_base: str):
     current_name = current_table_name(table_base)
     snapshot_name = snapshot_table_name(table_base)
@@ -216,12 +242,16 @@ def read_current_table(*, spark, table_base: str):
     )
 
 
+# COMMAND ----------
+
 def build_model_name(subject: str, analysis_name: str, catalog: str = "uat_analytics") -> str:
     subject = subject.strip()
     if subject not in SUBJECT_SPECS:
         raise ValueError(f"Unsupported subject '{subject}'. Supported: {list(SUBJECT_SPECS)}")
     return f"{catalog}.{SUBJECT_SPECS[subject].schema}.mdl_{analysis_name}"
 
+
+# COMMAND ----------
 
 def model_uri(model_name: str, *, version: int | None = None, alias: str | None = None) -> str:
     if version is not None:
@@ -231,6 +261,8 @@ def model_uri(model_name: str, *, version: int | None = None, alias: str | None 
     return f"models:/{model_name}"
 
 
+# COMMAND ----------
+
 def load_model(subject: str, analysis_name: str, *, catalog: str = "uat_analytics", version: int | None = None, alias: str | None = None):
     from mlflow import sklearn as mlflow_sklearn
 
@@ -238,6 +270,8 @@ def load_model(subject: str, analysis_name: str, *, catalog: str = "uat_analytic
     muri = model_uri(mname, version=version, alias=alias)
     return mlflow_sklearn.load_model(muri)
 
+
+# COMMAND ----------
 
 def get_model(
     subject: str,
@@ -262,15 +296,21 @@ def get_model(
         return pyfunc_model._model_impl.python_model.model
 
 
+# COMMAND ----------
+
 def list_model_versions(model_name: str):
     client = _mlflow_client()
     return client.search_model_versions(f"name='{model_name}'")
 
 
+# COMMAND ----------
+
 def set_model_alias(model_name: str, alias: str, version: int):
     client = _mlflow_client()
     client.set_registered_model_alias(model_name, alias, int(version))
 
+
+# COMMAND ----------
 
 def _resolve_model_version(model_name: str, *, version: int | None = None, alias: str | None = None, run_id: str | None = None) -> int:
     client = _mlflow_client()
@@ -294,6 +334,8 @@ def _resolve_model_version(model_name: str, *, version: int | None = None, alias
 
     return int(max(versions, key=lambda v: int(v.version)).version)
 
+
+# COMMAND ----------
 
 def register_candidate(
     model_name: str,
@@ -322,6 +364,8 @@ def register_candidate(
         "registered": True,
     }
 
+
+# COMMAND ----------
 
 def validate_candidate(
     model_name: str,
@@ -369,6 +413,8 @@ def validate_candidate(
     }
 
 
+# COMMAND ----------
+
 def promote_alias(
     model_name: str,
     *,
@@ -391,6 +437,8 @@ def promote_alias(
     }
 
 
+# COMMAND ----------
+
 def promote_model_version(source_model: str, target_model: str, *, version: int | None = None, alias: str | None = "champion"):
     """Copy one model version from source to target and optionally set alias on target."""
     result = _deploy_model(
@@ -402,6 +450,8 @@ def promote_model_version(source_model: str, target_model: str, *, version: int 
     )
     return result
 
+
+# COMMAND ----------
 
 def smoke_test_table(
     *,
@@ -443,6 +493,8 @@ def smoke_test_table(
     }
 
 
+# COMMAND ----------
+
 def smoke_test_model(
     *,
     model_name: str,
@@ -480,6 +532,8 @@ def smoke_test_model(
         }
 
 
+# COMMAND ----------
+
 def smoke_test_report(
     *,
     report_path: str,
@@ -498,6 +552,8 @@ def smoke_test_report(
         "error": None if passed else "report missing or below minimum size",
     }
 
+
+# COMMAND ----------
 
 def run_deploy_smoke_tests(
     *,
@@ -549,6 +605,8 @@ def run_deploy_smoke_tests(
     }
 
 
+# COMMAND ----------
+
 def _copy_report_if_exists(src: Path, dst: Path, dry_run: bool) -> bool:
     if not src.exists():
         return False
@@ -558,6 +616,26 @@ def _copy_report_if_exists(src: Path, dst: Path, dry_run: bool) -> bool:
     shutil.copy2(src, dst)
     return True
 
+
+# COMMAND ----------
+
+def write_report_with_single_backup(report_path: str, content: str) -> dict[str, str]:
+    """
+    Write report content, keeping a single backup copy of the previous version.
+    Backup path is '<report_path>.bkp' and is overwritten each save.
+    """
+    path = Path(report_path)
+    backup = Path(f"{report_path}.bkp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.exists():
+        shutil.copy2(path, backup)
+
+    path.write_text(content, encoding="utf-8")
+    return {"report_path": str(path), "backup_path": str(backup)}
+
+
+# COMMAND ----------
 
 def _deploy_model(
     source_model: str,
@@ -623,6 +701,8 @@ def _deploy_model(
 
     return result
 
+
+# COMMAND ----------
 
 def deploy(
     subject: str,

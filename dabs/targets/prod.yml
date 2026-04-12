@@ -12,3 +12,5 @@ targets:
     variables:
       environment: prod
       analysis_cluster_id: 1103-212813-x7lxbe2j
+      training_schedule_pause_status: PAUSED
+      prediction_schedule_pause_status: UNPAUSED

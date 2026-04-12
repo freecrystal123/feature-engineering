@@ -11,6 +11,9 @@
 # MAGIC %run ./00_llm_utils
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
@@ -28,7 +31,7 @@ def get_pca_metadata(analysis: str) -> dict:
     pca_table = f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}"
 
     pca_df = (
-        spark.table(pca_table)
+        read_current_table(spark=spark, table_base=pca_table)
         .select("pca_id", "pca_component_name", "pca_component_description")
     )
 
@@ -133,7 +136,7 @@ def get_clusters(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
     clusters_table = f'{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}'
 
-    return spark.table(clusters_table)
+    return read_current_table(spark=spark, table_base=clusters_table)
 
 # get_clusters('analysis_1').display()
 
@@ -230,11 +233,16 @@ def get_suggestions(analysis: str):
 
 def save_suggestions(suggestions_df, analysis):
     analysis_name = ANALYSIS_NAMES[analysis]
-    (
-        suggestions_df
-        .withColumn("created_at", F.current_timestamp())
-        .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-        .saveAsTable(f"{T_GOLD_CUSTOMER_SUGGESTIONS_PREFIX}_{analysis_name}")
+    publish_result = publish_table(
+        spark=spark,
+        df=suggestions_df.withColumn("created_at", F.current_timestamp()),
+        table_base=f"{T_GOLD_CUSTOMER_SUGGESTIONS_PREFIX}_{analysis_name}",
+        analysis_name=analysis_name,
+        current_mode="table",
+    )
+    print(
+        f"Published suggestions: {publish_result['snapshot_table']} and "
+        f"{publish_result['current_table']} (run_id={publish_result['run_id']})"
     )
 
 

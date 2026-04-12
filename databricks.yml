@@ -8,6 +8,12 @@ variables:
   analysis_cluster_id:
     description: Existing cluster id for Falaj Analysis cluster
     default: 1103-212813-x7lxbe2j
+  training_schedule_pause_status:
+    description: Pause status for training cadence jobs
+    default: PAUSED
+  prediction_schedule_pause_status:
+    description: Pause status for prediction cadence jobs
+    default: PAUSED
 
 include:
   - dabs/targets/*.yml

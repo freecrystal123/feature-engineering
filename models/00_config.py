@@ -1,7 +1,48 @@
 # Databricks notebook source
 # Shared config across ML analyses
 
-from models.utils import detect_environment
+import os
+import re
+
+
+def normalize_environment(value: str | None) -> str | None:
+    if not value:
+        return None
+    v = str(value).strip().lower()
+    if v in {"dev", "uat", "prod"}:
+        return v
+    m = re.search(r"/(dev|uat|prod)(?:/|$)", v)
+    if m:
+        return m.group(1)
+    return None
+
+
+def detect_environment(default: str = "uat") -> str:
+    env = normalize_environment(os.getenv("ENVIRONMENT"))
+    if env:
+        return env
+
+    try:
+        dbutils_obj = globals().get("dbutils")
+        if dbutils_obj is not None:
+            notebook_path = (
+                dbutils_obj.notebook.entry_point.getDbutils()
+                .notebook()
+                .getContext()
+                .notebookPath()
+                .get()
+            )
+            env = normalize_environment(notebook_path)
+            if env:
+                return env
+    except Exception:
+        pass
+
+    env = normalize_environment(os.getcwd())
+    if env:
+        return env
+
+    return default
 
 
 ENVIRONMENT = detect_environment(default="uat")

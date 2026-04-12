@@ -15,6 +15,9 @@
 # MAGIC %run ./01_feature_configs
 
 # COMMAND ----------
+# MAGIC %run ../utils
+
+# COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
@@ -130,18 +133,26 @@ def get_feature_cols_from_features_table(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
     features_table = f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}"
 
-    df = spark.table(features_table)
+    df = read_current_table(spark=spark, table_base=features_table)
 
     exclude = {
         "unique_user_id",
         "created_at",
+        "run_id",
+        "run_ts",
+        "ref_date",
+        "analysis_name",
         # extras defensivos (não atrapalham se não existirem)
         "cluster_id",
         "pca_id",
         "rfm_segment",
     }
 
-    feature_cols = [c for c in df.columns if c not in exclude]
+    numeric_types = {"double", "float", "int", "bigint", "smallint", "tinyint", "decimal", "long"}
+    feature_cols = [
+        c for c, t in df.dtypes
+        if (c not in exclude) and any(t.lower().startswith(nt) for nt in numeric_types)
+    ]
     return feature_cols
 # display(get_feature_cols_from_features_table('analysis_1'))
 
@@ -204,7 +215,7 @@ def get_pca_basic_info(analysis:str):
     analysis_name = ANALYSIS_NAMES[analysis]
     pca_table = f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}"
 
-    pca_df = spark.table(pca_table).drop("pca_component_name", "pca_component_description")
+    pca_df = read_current_table(spark=spark, table_base=pca_table).drop("pca_component_name", "pca_component_description")
 
     return pca_df
 
@@ -480,7 +491,7 @@ def enrich_pca_table_with_names(analysis: str):
 
 
     # Read PCA components table
-    pca_df = spark.table(pca_table).drop(
+    pca_df = read_current_table(spark=spark, table_base=pca_table).drop(
         "pca_component_name",
         "pca_component_description"
     )
@@ -503,7 +514,7 @@ def enrich_pca_table_with_names(analysis: str):
 
 
 
-    delta_table = DeltaTable.forName(spark, pca_table)
+    delta_table = DeltaTable.forName(spark, current_table_name(pca_table))
 
     (
         delta_table.alias("t")
@@ -563,7 +574,7 @@ def get_pca_metadata(analysis: str) -> dict:
     pca_table = f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}"
 
     pca_df = (
-        spark.table(pca_table)
+        read_current_table(spark=spark, table_base=pca_table)
         .select("pca_id", "pca_component_name", "pca_component_description")
     )
 
@@ -585,7 +596,10 @@ def get_pca_metadata(analysis: str) -> dict:
 def get_cluster_pca_stats(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
 
-    pred_df = spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+    pred_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
     pca_columns = [c for c in pred_df.columns if c.startswith("pca_")]
 
     cluster_pca_stats = (
@@ -1029,11 +1043,16 @@ def get_cluster_names(analysis: str):
 
 def save_cluster_names(cluster_names, analysis):
     analysis_name = ANALYSIS_NAMES[analysis]
-    (
-        cluster_names
-        .withColumn("created_at", F.current_timestamp())
-        .write.format("delta").mode("overwrite").option("overwriteSchema", "true")
-        .saveAsTable(f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}")
+    publish_result = publish_table(
+        spark=spark,
+        df=cluster_names.withColumn("created_at", F.current_timestamp()),
+        table_base=f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}",
+        analysis_name=analysis_name,
+        current_mode="table",
+    )
+    print(
+        f"Published clusters: {publish_result['snapshot_table']} and "
+        f"{publish_result['current_table']} (run_id={publish_result['run_id']})"
     )
 
 # COMMAND ----------
@@ -1069,7 +1088,10 @@ from mpl_toolkits.mplot3d import Axes3D
 def plot_clusters(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
 
-    pred_df = spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}")
+    pred_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
 
     pdf = (
         pred_df
@@ -1144,7 +1166,10 @@ plot_all_analysis_clusters()
 
 def get_cluster_metadata(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
-    clusters = spark.table(f'{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}')
+    clusters = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}",
+    )
 
     return {row['cluster_id']: row.asDict() for row in clusters.collect()}
 
@@ -1171,8 +1196,14 @@ from pyspark.sql.types import NumericType
 def get_info_to_decide_merge_and_explain_clusters(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
 
-    features_df = spark.table(f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}")
-    pred_df     = spark.table(f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}") 
+    features_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}",
+    )
+    pred_df = read_current_table(
+        spark=spark,
+        table_base=f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}",
+    )
 
     # 1) Join features + cluster_id
     base_df = (
