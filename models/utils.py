@@ -33,13 +33,11 @@ SUBJECT_SPECS: dict[str, SubjectSpec] = {
             "pca_{analysis}",
             "pred_{analysis}",
             "cluster_{analysis}",
-            "suggestion_{analysis}",
         ),
         model_template="mdl_{analysis}",
         report_templates=(
-            "clusters_report_{analysis}.html",
-            "cluster_report_detailed_{analysis}.html",
-            "cluster_detailed_report_{analysis}.html",
+            "general_information_{analysis}.html",
+            "detailed_information_{analysis}.html",
         ),
     ),
     "cross_sell_mba": SubjectSpec(
@@ -421,6 +419,7 @@ def promote_alias(
     source_alias: str = "challenger",
     target_alias: str = "champion",
     version: int | None = None,
+    remove_source_alias: bool = True,
 ) -> dict[str, Any]:
     """
     Promote model alias (e.g. challenger -> champion) within the same registered model.
@@ -428,11 +427,24 @@ def promote_alias(
     client = _mlflow_client()
     resolved_version = _resolve_model_version(model_name, version=version, alias=source_alias if version is None else None)
     client.set_registered_model_alias(model_name, target_alias, resolved_version)
+
+    source_alias_removed = False
+    if remove_source_alias and source_alias and (source_alias != target_alias):
+        try:
+            src_mv = client.get_model_version_by_alias(model_name, source_alias)
+            if int(src_mv.version) == int(resolved_version):
+                client.delete_registered_model_alias(model_name, source_alias)
+                source_alias_removed = True
+        except Exception:
+            # If source alias does not exist or cannot be removed, keep promotion successful.
+            source_alias_removed = False
+
     return {
         "model_name": model_name,
         "version": resolved_version,
         "source_alias": source_alias,
         "target_alias": target_alias,
+        "source_alias_removed": source_alias_removed,
         "promoted": True,
     }
 
@@ -612,7 +624,6 @@ def _copy_report_if_exists(src: Path, dst: Path, dry_run: bool) -> bool:
         return False
     if dry_run:
         return True
-    dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
     return True
 
@@ -753,9 +764,6 @@ def deploy(
     clone_mode = clone_mode.upper().strip()
     if clone_mode not in {"DEEP", "SHALLOW"}:
         raise ValueError("clone_mode must be DEEP or SHALLOW")
-    if not any([deploy_tables, deploy_reports, deploy_model]):
-        raise ValueError("At least one of deploy_tables, deploy_reports, deploy_model must be True.")
-
     source_schema = f"{source_catalog}.{spec.schema}"
     target_schema = f"{target_catalog}.{spec.schema}"
 
@@ -775,31 +783,84 @@ def deploy(
         "model": None,
     }
 
-    if (deploy_tables or deploy_reports) and (not dry_run):
+    if (deploy_tables or deploy_reports or deploy_model) and (not dry_run):
         spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")
 
     # Tables
     if deploy_tables:
         for template in spec.table_templates:
-            src_table = f"{source_schema}.{template.format(analysis=analysis_name)}"
-            dst_table = f"{target_schema}.{template.format(analysis=analysis_name)}"
-            exists = bool(spark.catalog.tableExists(src_table))
+            base_name = f"{template.format(analysis=analysis_name)}"
+            src_base = f"{source_schema}.{base_name}"
+            dst_base = f"{target_schema}.{base_name}"
 
-            item = {
-                "source": src_table,
-                "target": dst_table,
-                "exists": exists,
+            src_snapshot = snapshot_table_name(src_base)
+            dst_snapshot = snapshot_table_name(dst_base)
+            src_current = current_table_name(src_base)
+            dst_current = current_table_name(dst_base)
+
+            # 1) Snapshot table clone
+            snapshot_exists = bool(spark.catalog.tableExists(src_snapshot))
+            snapshot_item = {
+                "source": src_snapshot,
+                "target": dst_snapshot,
+                "exists": snapshot_exists,
                 "executed": False,
+                "kind": "snapshot",
             }
 
-            if exists and not dry_run:
-                spark.sql(f"CREATE OR REPLACE TABLE {dst_table} {clone_mode} CLONE {src_table}")
-                item["executed"] = True
+            if snapshot_exists and not dry_run:
+                spark.sql(f"CREATE OR REPLACE TABLE {dst_snapshot} {clone_mode} CLONE {src_snapshot}")
+                snapshot_item["executed"] = True
 
-            plan["tables"].append(item)
+            plan["tables"].append(snapshot_item)
+
+            # 2) Current object recreation (as view on top of target snapshot)
+            current_exists = bool(spark.catalog.tableExists(src_current))
+            current_item = {
+                "source": src_current,
+                "target": dst_current,
+                "exists": current_exists and snapshot_exists,
+                "executed": False,
+                "kind": "current",
+            }
+
+            if current_exists and snapshot_exists and not dry_run:
+                run_id_value = None
+                try:
+                    rows = spark.table(src_current).select("run_id").distinct().limit(1).collect()
+                    if rows:
+                        run_id_value = rows[0]["run_id"]
+                except Exception:
+                    run_id_value = None
+
+                if run_id_value:
+                    safe_run_id = str(run_id_value).replace("'", "''")
+                    spark.sql(
+                        f"""
+                        CREATE OR REPLACE VIEW {dst_current} AS
+                        SELECT *
+                        FROM {dst_snapshot}
+                        WHERE run_id = '{safe_run_id}'
+                        """
+                    )
+                else:
+                    # Fallback: expose latest snapshot state when source current has no run_id.
+                    spark.sql(
+                        f"""
+                        CREATE OR REPLACE VIEW {dst_current} AS
+                        SELECT *
+                        FROM {dst_snapshot}
+                        """
+                    )
+                current_item["executed"] = True
+
+            plan["tables"].append(current_item)
 
     # Reports
     if deploy_reports:
+        if not dry_run:
+            spark.sql(f"CREATE VOLUME IF NOT EXISTS {target_schema}.{spec.report_folder}")
+
         src_report_dir = Path(f"/Volumes/{source_catalog}/{spec.schema}/{spec.report_folder}")
         dst_report_dir = Path(f"/Volumes/{target_catalog}/{spec.schema}/{spec.report_folder}")
 

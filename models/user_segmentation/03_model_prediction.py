@@ -97,13 +97,35 @@ def predict_analysis(analysis: str):
 
     pca_base = f"{T_GOLD_CUSTOMER_PCA_COMP_PREFIX}_{analysis_name}"
     pred_base = f"{T_GOLD_CUSTOMER_PREDICTED_PREFIX}_{analysis_name}"
+    cluster_base = f"{T_GOLD_CUSTOMER_CLUSTERS_PREFIX}_{analysis_name}"
+
+    # Preserve existing PCA names/descriptions in daily prediction runs.
+    try:
+        existing_pca_meta = (
+            read_current_table(spark=spark, table_base=pca_base)
+            .select("pca_id", "pca_component_name", "pca_component_description")
+            .dropDuplicates(["pca_id"])
+        )
+        pca_spark = (
+            pca_spark.alias("n")
+            .join(existing_pca_meta.alias("m"), on="pca_id", how="left")
+            .select(
+                "pca_id",
+                *[c for c in pca_spark.columns if c not in {"pca_id"}],
+                "pca_component_name",
+                "pca_component_description",
+            )
+        )
+    except Exception:
+        # First run may not have prior metadata yet.
+        pass
 
     pca_publish = publish_table(
         spark=spark,
         df=pca_spark,
         table_base=pca_base,
         analysis_name=analysis_name,
-        current_mode="table",
+        current_mode="view",
     )
     pred_publish = publish_table(
         spark=spark,
@@ -111,8 +133,52 @@ def predict_analysis(analysis: str):
         table_base=pred_base,
         analysis_name=analysis_name,
         run_id=pca_publish["run_id"],
-        current_mode="table",
+        current_mode="view",
     )
+
+    # Keep cluster naming stable in daily prediction:
+    # update only population by cluster_id using existing cluster naming table.
+    cluster_publish = None
+    try:
+        existing_clusters = read_current_table(spark=spark, table_base=cluster_base)
+        if existing_clusters.limit(1).count() == 0:
+            cluster_snapshot = snapshot_table_name(cluster_base)
+            if spark.catalog.tableExists(cluster_snapshot):
+                latest_run = (
+                    spark.table(cluster_snapshot)
+                    .groupBy("run_id")
+                    .agg(F.max("run_ts").alias("max_run_ts"))
+                    .orderBy(F.col("max_run_ts").desc())
+                    .select("run_id")
+                    .limit(1)
+                    .collect()
+                )
+                if latest_run:
+                    existing_clusters = spark.table(cluster_snapshot).filter(
+                        F.col("run_id") == F.lit(latest_run[0]["run_id"])
+                    )
+
+        fresh_counts = (
+            pred_spark.groupBy("cluster_id")
+            .agg(F.count("*").alias("num_users"))
+        )
+        metadata_cols = {"run_id", "run_ts", "ref_date", "analysis_name"}
+        cluster_cols = [c for c in existing_clusters.columns if c not in metadata_cols]
+        updated_clusters = (
+            existing_clusters.select(*cluster_cols).drop("num_users")
+            .join(fresh_counts, on="cluster_id", how="left")
+            .withColumn("num_users", F.coalesce(F.col("num_users"), F.lit(0)))
+        )
+        cluster_publish = publish_table(
+            spark=spark,
+            df=updated_clusters.withColumn("created_at", F.current_timestamp()),
+            table_base=cluster_base,
+            analysis_name=analysis_name,
+            run_id=pca_publish["run_id"],
+            current_mode="view",
+        )
+    except Exception:
+        cluster_publish = None
 
     return {
         "analysis": analysis,
@@ -120,6 +186,7 @@ def predict_analysis(analysis: str):
         "model_alias": model_alias,
         "pca_current": pca_publish["current_table"],
         "pred_current": pred_publish["current_table"],
+        "cluster_current": cluster_publish["current_table"] if cluster_publish else None,
         "run_id": pca_publish["run_id"],
     }
 

@@ -18,6 +18,20 @@ from pyspark.sql.window import Window
 
 # COMMAND ----------
 
+dbutils.widgets.text("analysis_id", "all")
+analysis_id = dbutils.widgets.get("analysis_id").strip()
+
+
+def get_analyses_to_run():
+    if analysis_id.lower() == "all":
+        return list(ANALYSIS_NAMES.keys())
+    if analysis_id not in ANALYSIS_NAMES:
+        raise ValueError(f"Invalid analysis_id '{analysis_id}'. Valid: {list(ANALYSIS_NAMES)} or 'all'.")
+    return [analysis_id]
+
+
+# COMMAND ----------
+
 TOP_N_FEATURES = 6 # top variables for PCA components naming
 TOP_N_PCA_COMP = 0 # all
 
@@ -1168,7 +1182,7 @@ def get_clusters_report_general_information(analysis: str):
 
 # COMMAND ----------
 
-for analysis, analysis_name in ANALYSIS_NAMES.items():
+for analysis in get_analyses_to_run():
     get_clusters_report_general_information(analysis=analysis)
 
 # COMMAND ----------
@@ -2517,5 +2531,5 @@ def get_clusters_report_detailed_information(analysis: str):
 
 # COMMAND ----------
 
-for analysis, analysis_name in ANALYSIS_NAMES.items():
+for analysis in get_analyses_to_run():
     get_clusters_report_detailed_information(analysis=analysis)

@@ -17,6 +17,20 @@ from pyspark.sql.functions import broadcast
 
 # COMMAND ----------
 
+dbutils.widgets.text("analysis_id", "all")
+analysis_id = dbutils.widgets.get("analysis_id").strip()
+
+
+def get_analyses_to_run():
+    if analysis_id.lower() == "all":
+        return list(ANALYSIS_NAMES.keys())
+    if analysis_id not in ANALYSIS_NAMES:
+        raise ValueError(f"Invalid analysis_id '{analysis_id}'. Valid: {list(ANALYSIS_NAMES)} or 'all'.")
+    return [analysis_id]
+
+
+# COMMAND ----------
+
 
 current_date = CURRENT_DATE
 
@@ -542,7 +556,8 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
 
 
 
-for analysis, analysis_name in ANALYSIS_NAMES.items():
+for analysis in get_analyses_to_run():
+    analysis_name = ANALYSIS_NAMES[analysis]
     print(f"Processing {analysis_name}...")
 
     features = get_all_features(analysis)
@@ -551,7 +566,7 @@ for analysis, analysis_name in ANALYSIS_NAMES.items():
         df=features.withColumn("created_at", F.current_timestamp()),
         table_base=f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}",
         analysis_name=analysis_name,
-        current_mode="table",
+        current_mode="view",
     )
     print(
         f"Published features: {publish_result['snapshot_table']} and "

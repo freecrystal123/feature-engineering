@@ -1,5 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
+# MAGIC %run ../../models/utils
+
+# COMMAND ----------
 dbutils.widgets.text("subject", "user_segmentation")
 dbutils.widgets.text("analysis_name", "analysis_1")
 dbutils.widgets.text("model_catalog", "uat_analytics")
@@ -8,8 +11,6 @@ dbutils.widgets.text("required_signature", "true")
 
 # COMMAND ----------
 import json
-
-from models.utils import build_model_name, validate_candidate
 
 
 def _to_bool(value: str, default: bool = False) -> bool:

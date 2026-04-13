@@ -1,5 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
+# MAGIC %run ../../models/utils
+
+# COMMAND ----------
 dbutils.widgets.text("subject", "user_segmentation")
 dbutils.widgets.text("analysis_name", "analysis_1")
 dbutils.widgets.text("source_catalog", "uat_analytics")
@@ -15,8 +18,6 @@ dbutils.widgets.text("run_smoke_tests", "true")
 
 # COMMAND ----------
 import json
-
-from models.utils import build_model_name, deploy, promote_alias
 
 
 def _to_bool(value: str, default: bool = False) -> bool:
@@ -48,32 +49,106 @@ promotion = {
     "skipped": True,
     "reason": "promote_first=false",
 }
-if promote_first:
-    if dry_run:
-        promotion = {
-            "skipped": True,
-            "reason": "dry_run=true (promotion skipped)",
-        }
-    else:
-        promotion = promote_alias(
-            model_name=source_model_name,
-            source_alias=source_alias,
-            target_alias=target_alias,
+
+only_smoke = (
+    (not promote_first)
+    and (not deploy_model)
+    and (not deploy_tables)
+    and (not deploy_reports)
+    and run_smoke_tests
+)
+
+if only_smoke:
+    if subject not in SUBJECT_SPECS:
+        raise ValueError(f"Unsupported subject '{subject}'. Supported: {list(SUBJECT_SPECS)}")
+
+    spec = SUBJECT_SPECS[subject]
+    smoke_schema = f"{target_catalog}.{spec.schema}"
+    smoke_plan = {
+        "subject": subject,
+        "analysis_name": analysis_name,
+        "source_schema": smoke_schema,
+        "target_schema": smoke_schema,
+        "dry_run": True,
+        "selected_assets": {
+            "tables": True,
+            "reports": True,
+            "model": True,
+        },
+        "tables": [],
+        "reports": [],
+        "model": None,
+    }
+
+    for template in spec.table_templates:
+        base_table = f"{smoke_schema}.{template.format(analysis=analysis_name)}"
+        for table_name in (snapshot_table_name(base_table), current_table_name(base_table)):
+            smoke_plan["tables"].append(
+                {
+                    "source": table_name,
+                    "target": table_name,
+                    "exists": None,
+                    "executed": False,
+                }
+            )
+
+    report_dir = f"/Volumes/{target_catalog}/{spec.schema}/{spec.report_folder}"
+    for report_tpl in spec.report_templates:
+        report_name = report_tpl.format(analysis=analysis_name)
+        report_path = f"{report_dir}/{report_name}"
+        smoke_plan["reports"].append(
+            {
+                "source": report_path,
+                "target": report_path,
+                "exists": None,
+                "executed": False,
+            }
         )
 
-plan = deploy(
-    subject=subject,
-    analysis_name=analysis_name,
-    spark=spark,
-    source_catalog=source_catalog,
-    target_catalog=target_catalog,
-    dry_run=dry_run,
-    model_alias=target_alias,
-    deploy_model=deploy_model,
-    deploy_tables=deploy_tables,
-    deploy_reports=deploy_reports,
-    run_smoke_tests=run_smoke_tests,
-)
+    if spec.model_template:
+        model_short = spec.model_template.format(analysis=analysis_name)
+        smoke_plan["model"] = {
+            "target_model": f"{smoke_schema}.{model_short}",
+        }
+
+    smoke = run_deploy_smoke_tests(
+        spark=spark,
+        deploy_plan=smoke_plan,
+        model_alias=target_alias or "champion",
+    )
+
+    plan = {
+        "smoke_only_mode": True,
+        "smoke_catalog": target_catalog,
+        "smoke_tests": smoke,
+    }
+else:
+    if promote_first:
+        if dry_run:
+            promotion = {
+                "skipped": True,
+                "reason": "dry_run=true (promotion skipped)",
+            }
+        else:
+            promotion = promote_alias(
+                model_name=source_model_name,
+                source_alias=source_alias,
+                target_alias=target_alias,
+            )
+
+    plan = deploy(
+        subject=subject,
+        analysis_name=analysis_name,
+        spark=spark,
+        source_catalog=source_catalog,
+        target_catalog=target_catalog,
+        dry_run=dry_run,
+        model_alias=target_alias,
+        deploy_model=deploy_model,
+        deploy_tables=deploy_tables,
+        deploy_reports=deploy_reports,
+        run_smoke_tests=run_smoke_tests,
+    )
 
 output = {
     "subject": subject,
