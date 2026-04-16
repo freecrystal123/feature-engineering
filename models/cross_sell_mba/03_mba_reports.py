@@ -15,7 +15,7 @@
 # MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 

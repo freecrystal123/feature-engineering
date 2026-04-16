@@ -15,7 +15,7 @@
 # MAGIC %run ./01_feature_configs
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 

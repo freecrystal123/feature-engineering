@@ -7,7 +7,10 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
+
+# COMMAND ----------
+# MAGIC %run ../../core/uc_feature_store
 
 # COMMAND ----------
 
@@ -36,21 +39,45 @@ def get_analyses_to_run():
 def get_X_for_prediction(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
     table_base = f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}"
-    spark_df = read_current_table(spark=spark, table_base=table_base)
+    feature_table = snapshot_table_name(table_base)
+    entity_source_table = current_table_name(table_base)
+    table_df = spark.table(feature_table)
+    if "unique_user_id" not in table_df.columns:
+        raise ValueError(f"unique_user_id doesn't exist in feature table '{feature_table}'")
 
-    if "unique_user_id" in spark_df.columns:
-        spark_df = spark_df.orderBy("unique_user_id")
-
-    features = spark_df.toPandas()
-    if "unique_user_id" not in features.columns:
-        raise ValueError("unique_user_id doesn't exist in features table")
-
-    user_ids = features["unique_user_id"].copy()
+    metadata_cols = {"run_id", "run_ts", "ref_date", "analysis_name", "created_at"}
     numeric_cols = [
-        col for col, dtype in features.dtypes.items()
-        if dtype in ("int64", "float64") and col != "unique_user_id"
+        f.name
+        for f in table_df.schema.fields
+        if f.name not in (metadata_cols | {"unique_user_id"})
+        and f.dataType.typeName() in {"byte", "short", "integer", "long", "float", "double", "decimal"}
     ]
-    X = features[numeric_cols]
+    if not numeric_cols:
+        raise ValueError(f"No numeric feature columns found in table '{feature_table}'.")
+
+    ts_result = create_training_set_from_feature_tables(
+        spark=spark,
+        primary_table=feature_table,
+        entity_source_table=entity_source_table,
+        entity_keys="unique_user_id",
+        primary_feature_names=numeric_cols,
+        secondary_lookups=[],
+        label=None,
+        exclude_columns=[],
+        entity_timestamp_col="run_ts",
+    )
+    features = (
+        ts_result["training_set"]
+        .load_df()
+        .orderBy("unique_user_id")
+        .toPandas()
+    )
+    user_ids = features["unique_user_id"].copy()
+    X = (
+        features[numeric_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .astype("float64")
+    )
     return X, user_ids
 
 

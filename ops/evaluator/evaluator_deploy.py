@@ -1,12 +1,12 @@
 # Databricks notebook source
 # COMMAND ----------
-# MAGIC %run ../../models/utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 dbutils.widgets.text("subject", "user_segmentation")
 dbutils.widgets.text("analysis_name", "analysis_1")
-dbutils.widgets.text("source_catalog", "uat_analytics")
-dbutils.widgets.text("target_catalog", "prod_analytics")
+dbutils.widgets.text("source_catalog", "ml_train")
+dbutils.widgets.text("target_catalog", "ml_prod")
 dbutils.widgets.text("source_alias", "challenger")
 dbutils.widgets.text("target_alias", "champion")
 dbutils.widgets.text("promote_first", "true")

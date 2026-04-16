@@ -7,7 +7,7 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 

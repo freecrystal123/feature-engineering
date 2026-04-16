@@ -14,7 +14,7 @@
 # MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 
@@ -229,6 +229,9 @@ user_item_publish = publish_table(
     ),
     table_base=user_item_base,
     analysis_name=analysis_name,
+    current_mode="view",
+    primary_keys=["unique_user_id", "item_id", "lookback_days", "run_ts"],
+    timeseries_column="run_ts",
 )
 
 transactions_publish = publish_table(
@@ -242,6 +245,9 @@ transactions_publish = publish_table(
     table_base=transactions_base,
     analysis_name=analysis_name,
     run_id=user_item_publish["run_id"],
+    current_mode="view",
+    primary_keys=["unique_user_id", "lookback_days", "run_ts"],
+    timeseries_column="run_ts",
 )
 
 print(

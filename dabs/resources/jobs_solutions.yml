@@ -1,7 +1,7 @@
 resources:
   jobs:
-    ml_user_segmentation_training_each_3m:
-      name: ml_user_segmentation_training_each_3m
+    user_segmentation_training:
+      name: user_segmentation_training
       tags:
         solution: user_segmentation
         cadence: each_3m
@@ -52,11 +52,11 @@ resources:
       queue:
         enabled: true
 
-    ml_user_segmentation_prediction_each_day:
-      name: ml_user_segmentation_prediction_each_day
+    user_segmentation_prediction:
+      name: user_segmentation_prediction
       tags:
         solution: user_segmentation
-        cadence: each_day
+        cadence: each_1d
       job_clusters:
         - job_cluster_key: user_segmentation_prediction_cluster
           new_cluster:
@@ -106,11 +106,11 @@ resources:
       queue:
         enabled: true
 
-    ml_cross_sell_mba_prediction_each_day:
-      name: ml_cross_sell_mba_prediction_each_day
+    cross_sell_mba_prediction:
+      name: cross_sell_mba_prediction
       tags:
         solution: cross_sell_mba
-        cadence: each_day
+        cadence: each_1d
       schedule:
         quartz_cron_expression: "0 0 5 * * ?"
         timezone_id: Asia/Dubai

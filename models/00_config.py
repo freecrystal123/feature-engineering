@@ -9,15 +9,15 @@ def normalize_environment(value: str | None) -> str | None:
     if not value:
         return None
     v = str(value).strip().lower()
-    if v in {"dev", "uat", "prod"}:
+    if v in {"dev", "train", "prod"}:
         return v
-    m = re.search(r"/(dev|uat|prod)(?:/|$)", v)
+    m = re.search(r"/(dev|train|prod)(?:/|$)", v)
     if m:
         return m.group(1)
     return None
 
 
-def detect_environment(default: str = "uat") -> str:
+def detect_environment(default: str = "train") -> str:
     env = normalize_environment(os.getenv("ENVIRONMENT"))
     if env:
         return env
@@ -45,7 +45,7 @@ def detect_environment(default: str = "uat") -> str:
     return default
 
 
-ENVIRONMENT = detect_environment(default="uat")
+ENVIRONMENT = detect_environment(default="train")
 
 if ENVIRONMENT == "dev":
     READ_ENVIRONMENT = "dev"
@@ -58,7 +58,12 @@ READ_SILVER_DB = f"{READ_ENVIRONMENT}_silver"
 READ_GOLD_DB = f"{READ_ENVIRONMENT}_gold"
 
 # Keep writes environment-scoped by default
-WRITE_CATALOG = f"{WRITE_ENVIRONMENT}_analytics"
+if WRITE_ENVIRONMENT == "prod":
+    WRITE_CATALOG = "ml_prod"
+elif WRITE_ENVIRONMENT in {"train", "dev"}:
+    WRITE_CATALOG = "ml_train"
+else:
+    raise ValueError(f"Unsupported WRITE_ENVIRONMENT='{WRITE_ENVIRONMENT}'.")
 
 # Shared folder conventions
 REPORTS_FOLDER_NAME = "reports"

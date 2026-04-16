@@ -4,7 +4,7 @@ bundle:
 variables:
   environment:
     description: Environment name
-    default: uat
+    default: train
   analysis_cluster_id:
     description: Existing cluster id for Falaj Analysis cluster
     default: 1103-212813-x7lxbe2j

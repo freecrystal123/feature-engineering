@@ -43,7 +43,7 @@ SUBJECT_SPECS: dict[str, SubjectSpec] = {
             "mba_association_rules_cross_{analysis}",
             "mba_association_rules_focus_{analysis}",
         ),
-        model_template=None,
+        model_template="mdl_{analysis}",
         report_templates=(
             "mba_rules_report_{analysis}.html",
         ),

@@ -2,7 +2,7 @@ targets:
   prod:
     mode: production
     presets:
-      name_prefix: "[PROD] "
+      name_prefix: "[PROD_ML] "
       tags:
         deployment: prod
         project: falaj-machine-learning

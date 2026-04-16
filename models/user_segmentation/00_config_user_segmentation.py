@@ -2,7 +2,7 @@
 # MAGIC %run ../00_config
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 

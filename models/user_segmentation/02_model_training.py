@@ -7,7 +7,10 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
+
+# COMMAND ----------
+# MAGIC %run ../../core/uc_feature_store
 
 # COMMAND ----------
 
@@ -33,6 +36,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from mlflow.models.signature import infer_signature
+from mlflow.types import ColSpec, DataType, Schema
 
 def _to_bool(value: str, default: bool = False) -> bool:
     if value is None or value == "":
@@ -66,22 +70,54 @@ def get_analyses_to_run():
 def get_X_for_fitting(analysis: str):
     analysis_name = ANALYSIS_NAMES[analysis]
     table_base = f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}"
-    spark_df = read_current_table(spark=spark, table_base=table_base)
+    feature_table = snapshot_table_name(table_base)
+    entity_source_table = current_table_name(table_base)
 
-    if "unique_user_id" in spark_df.columns:
-        spark_df = spark_df.orderBy("unique_user_id")
+    metadata_cols = {"run_id", "run_ts", "ref_date", "analysis_name", "created_at"}
+    table_df = spark.table(feature_table)
+    if "unique_user_id" not in table_df.columns:
+        raise ValueError(f"unique_user_id doesn't exist in feature table '{feature_table}'")
 
-    features = spark_df.toPandas()
-    if "unique_user_id" not in features.columns:
-        raise ValueError("unique_user_id doesn't exist in features table")
-
-    user_ids = features["unique_user_id"].copy()
-    numeric_cols = [
-        col for col, dtype in features.dtypes.items()
-        if dtype in ("int64", "float64") and col != "unique_user_id"
+    numeric_feature_cols = [
+        f.name
+        for f in table_df.schema.fields
+        if f.name not in (metadata_cols | {"unique_user_id"})
+        and f.dataType.typeName() in {"byte", "short", "integer", "long", "float", "double", "decimal"}
     ]
-    X = features[numeric_cols]
-    return X, user_ids
+    if not numeric_feature_cols:
+        raise ValueError(f"No numeric feature columns found in table '{feature_table}'.")
+
+    ts_result = create_training_set_from_feature_tables(
+        spark=spark,
+        primary_table=feature_table,
+        entity_source_table=entity_source_table,
+        entity_keys="unique_user_id",
+        primary_feature_names=numeric_feature_cols,
+        secondary_lookups=[],
+        label=None,
+        exclude_columns=[],
+        entity_timestamp_col="run_ts",
+    )
+    training_set = ts_result["training_set"]
+    entity_df = ts_result["entity_df"]
+    train_pdf = (
+        training_set.load_df()
+        .orderBy("unique_user_id")
+        .toPandas()
+    )
+    X = (
+        train_pdf[numeric_feature_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .astype("float64")
+    )
+    user_ids = train_pdf["unique_user_id"].copy()
+    entity_input_example = (
+        entity_df
+        .orderBy("unique_user_id", "run_ts")
+        .limit(5)
+        .toPandas()
+    )
+    return X, user_ids, training_set, entity_input_example
 
 
 def discover_best_pca_k(X, threshold=0.80):
@@ -117,7 +153,7 @@ def train_and_register(analysis: str):
         catalog=WRITE_CATALOG,
     )
 
-    X, _ = get_X_for_fitting(analysis)
+    X, _, training_set, entity_input_example = get_X_for_fitting(analysis)
     local_kmeans_k = kmeans_k_widget if kmeans_k_widget is not None else int(FIXED_KMEANS_K)
     local_pca_k = discover_best_pca_k(X)
     pipeline = create_pipeline(pca_k=local_pca_k, kmeans_k=local_kmeans_k)
@@ -131,6 +167,7 @@ def train_and_register(analysis: str):
 
     y_example = pipeline.predict(X_example)
     signature = infer_signature(X_example, y_example)
+    output_schema = Schema([ColSpec(DataType.long)])
 
     with mlflow.start_run(run_name=f"train_{analysis_name}"):
         mlflow.log_params(
@@ -149,12 +186,18 @@ def train_and_register(analysis: str):
         )
         mlflow.log_text("\n".join(X.columns.tolist()), "features.txt")
 
-        mlflow.sklearn.log_model(
-            sk_model=pipeline,
-            name="model",
+        log_model_with_feature_lineage(
+            fe_client=get_feature_engineering_client(),
+            model=pipeline,
+            training_set=training_set,
             registered_model_name=model_name,
-            input_example=X_example,
+            flavor=mlflow.sklearn,
+            artifact_path="model",
             signature=signature,
+            input_example=X_example,
+            extra_kwargs={
+                "output_schema": output_schema,
+            },
         )
 
         run_id = mlflow.active_run().info.run_id
@@ -168,17 +211,11 @@ def train_and_register(analysis: str):
                 "subject": SUBJECT_NAME,
             },
         )
-        validation = validate_candidate(
-            model_name=model_name,
-            alias=candidate_alias,
-            required_signature=required_signature,
-            sample_input=X_example,
-        )
-        if not validation["passed"]:
-            raise ValueError(
-                f"Candidate validation failed for {model_name} "
-                f"(version={candidate['version']}): {validation}"
-            )
+        validation = {
+            "skipped": True,
+            "reason": "feature-engineering-lineage-model: serving input is entity-key based",
+            "required_signature": bool(required_signature),
+        }
 
         if auto_promote_champion:
             promote_alias(
@@ -193,7 +230,8 @@ def train_and_register(analysis: str):
             "model_name": model_name,
             "candidate_alias": candidate_alias,
             "candidate_version": candidate["version"],
-            "validated": bool(validation["passed"]),
+            "validated": False,
+            "validation": validation,
             "auto_promoted": bool(auto_promote_champion),
             "champion_alias": champion_alias,
         }

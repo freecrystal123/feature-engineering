@@ -7,7 +7,7 @@
 # MAGIC %run ./00_config_user_segmentation
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 
@@ -567,6 +567,8 @@ for analysis in get_analyses_to_run():
         table_base=f"{T_GOLD_CUSTOMER_FEATURES_PREFIX}_{analysis_name}",
         analysis_name=analysis_name,
         current_mode="view",
+        primary_keys=["unique_user_id", "run_ts"],
+        timeseries_column="run_ts",
     )
     print(
         f"Published features: {publish_result['snapshot_table']} and "

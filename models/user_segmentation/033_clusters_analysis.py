@@ -6,7 +6,7 @@
 # MAGIC %run ./00_llm_utils
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 

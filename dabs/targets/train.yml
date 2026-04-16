@@ -1,23 +1,23 @@
 targets:
-  uat:
+  train:
     presets:
-      name_prefix: "[UAT] "
+      name_prefix: "[TRAIN_ML] "
       trigger_pause_status: PAUSED
       tags:
-        deployment: uat
+        deployment: train
         project: falaj-machine-learning
     workspace:
       host: https://adb-1817635743983490.10.azuredatabricks.net/
-      root_path: /Workspace/falaj-machine-learning/uat
+      root_path: /Workspace/falaj-machine-learning/train
     variables:
-      environment: uat
+      environment: train
       analysis_cluster_id: 1103-212813-x7lxbe2j
       training_schedule_pause_status: UNPAUSED
       prediction_schedule_pause_status: PAUSED
     resources:
       jobs:
         evaluator_validate:
-          name: evaluator_validate
+          name: "[OPS_ML] evaluator_validate"
           tags:
             job_type: ops
             flow: evaluator
@@ -29,7 +29,7 @@ targets:
                 base_parameters:
                   subject: user_segmentation
                   analysis_name: analysis_1
-                  model_catalog: uat_analytics
+                  model_catalog: ml_train
                   candidate_alias: challenger
                   required_signature: "true"
               existing_cluster_id: ${var.analysis_cluster_id}
@@ -37,7 +37,7 @@ targets:
             enabled: true
 
         evaluator_deploy:
-          name: evaluator_deploy
+          name: "[OPS_ML] evaluator_deploy"
           tags:
             job_type: ops
             flow: evaluator
@@ -49,8 +49,8 @@ targets:
                 base_parameters:
                   subject: user_segmentation
                   analysis_name: analysis_1
-                  source_catalog: uat_analytics
-                  target_catalog: prod_analytics
+                  source_catalog: ml_train
+                  target_catalog: ml_prod
                   source_alias: challenger
                   target_alias: champion
                   promote_first: "true"

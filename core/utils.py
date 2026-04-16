@@ -12,7 +12,7 @@ from uuid import uuid4
 
 # COMMAND ----------
 
-# MAGIC %run ./models_structure
+# MAGIC %run ../models/models_structure
 
 
 # COMMAND ----------
@@ -29,9 +29,9 @@ def normalize_environment(value: str | None) -> str | None:
     if not value:
         return None
     v = str(value).strip().lower()
-    if v in {"dev", "uat", "prod"}:
+    if v in {"dev", "train", "prod"}:
         return v
-    m = re.search(r"/(dev|uat|prod)(?:/|$)", v)
+    m = re.search(r"/(dev|train|prod)(?:/|$)", v)
     if m:
         return m.group(1)
     return None
@@ -39,13 +39,13 @@ def normalize_environment(value: str | None) -> str | None:
 
 # COMMAND ----------
 
-def detect_environment(default: str = "uat") -> str:
+def detect_environment(default: str = "train") -> str:
     # 1) Prefer explicit ENVIRONMENT variable (e.g., passed in Databricks Jobs).
     env = normalize_environment(os.getenv("ENVIRONMENT"))
     if env:
         return env
 
-    # 2) Detect from Databricks notebook path (workspace root_path contains /uat or /prod).
+    # 2) Detect from Databricks notebook path (workspace root_path contains /train or /prod).
     try:
         dbutils_obj = globals().get("dbutils")
         if dbutils_obj is not None:
@@ -107,6 +107,111 @@ def _with_col_if_missing(df, col_name: str, expr):
 
 # COMMAND ----------
 
+def _normalize_cols(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value]
+
+
+# COMMAND ----------
+
+def _ensure_uc_primary_key_constraints(
+    *,
+    spark,
+    table_name: str,
+    primary_keys: str | list[str] | tuple[str, ...] | None = None,
+    timeseries_column: str | None = None,
+) -> dict[str, Any]:
+    """
+    Ensure UC informational PRIMARY KEY exists for feature-table usage.
+    """
+    pk_cols = _normalize_cols(primary_keys)
+    if not pk_cols:
+        return {"applied": False, "reason": "no_primary_keys"}
+
+    cols = spark.table(table_name).columns
+    missing = [c for c in pk_cols if c not in cols]
+    if missing:
+        raise ValueError(f"Primary key columns not found in {table_name}: {missing}")
+
+    if timeseries_column is not None and timeseries_column not in cols:
+        raise ValueError(
+            f"timeseries_column='{timeseries_column}' was not found in table '{table_name}'."
+        )
+    if (timeseries_column is not None) and (timeseries_column not in pk_cols):
+        pk_cols.append(timeseries_column)
+
+    # UC PK columns must be NOT NULL.
+    for c in pk_cols:
+        null_count = (
+            spark.sql(
+                f"""
+                SELECT COUNT(*) AS c
+                FROM {table_name}
+                WHERE `{c}` IS NULL
+                """
+            )
+            .collect()[0]["c"]
+        )
+        if int(null_count) > 0:
+            raise ValueError(
+                f"Cannot apply PRIMARY KEY on {table_name}: column '{c}' contains {int(null_count)} NULL values."
+            )
+
+        try:
+            spark.sql(f"ALTER TABLE {table_name} ALTER COLUMN `{c}` SET NOT NULL")
+        except Exception as e:
+            err = str(e).lower()
+            already_not_null = (
+                "already" in err
+                and ("not null" in err or "nullable" in err)
+            )
+            if not already_not_null:
+                raise
+
+    pk_expr_parts: list[str] = []
+    for c in pk_cols:
+        if timeseries_column is not None and c == timeseries_column:
+            pk_expr_parts.append(f"`{c}` TIMESERIES")
+        else:
+            pk_expr_parts.append(f"`{c}`")
+    pk_expr = ", ".join(pk_expr_parts)
+    constraint_name = f"pk_{table_name.split('.')[-1]}".replace("-", "_")
+
+    try:
+        spark.sql(
+            f"""
+            ALTER TABLE {table_name}
+            ADD CONSTRAINT {constraint_name}
+            PRIMARY KEY ({pk_expr})
+            """
+        )
+        return {
+            "applied": True,
+            "constraint_name": constraint_name,
+            "primary_keys": pk_cols,
+            "timeseries_column": timeseries_column,
+        }
+    except Exception as e:
+        # UC raises when the PK already exists; treat as idempotent.
+        err = str(e)
+        lower_err = err.lower()
+        already_exists = ("already exists" in lower_err) or ("duplicate constraint" in lower_err)
+        if not already_exists:
+            raise
+        return {
+            "applied": False,
+            "constraint_name": constraint_name,
+            "primary_keys": pk_cols,
+            "timeseries_column": timeseries_column,
+            "reason": err,
+        }
+
+
+# COMMAND ----------
+
 def publish_table(
     *,
     spark,
@@ -116,6 +221,8 @@ def publish_table(
     ref_date: str | None = None,
     run_id: str | None = None,
     current_mode: str = "view",
+    primary_keys: str | list[str] | tuple[str, ...] | None = None,
+    timeseries_column: str | None = None,
 ) -> dict[str, Any]:
     """
     Publish a dataframe using snapshot/current convention.
@@ -146,6 +253,12 @@ def publish_table(
         out_df = _with_col_if_missing(out_df, "analysis_name", F.lit(analysis_name))
 
     out_df.write.format("delta").mode("append").saveAsTable(snapshot_name)
+    snapshot_constraints = _ensure_uc_primary_key_constraints(
+        spark=spark,
+        table_name=snapshot_name,
+        primary_keys=primary_keys,
+        timeseries_column=timeseries_column,
+    )
 
     if current_mode == "view":
         spark.sql(
@@ -158,6 +271,12 @@ def publish_table(
         )
     else:
         out_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(current_name)
+        _ensure_uc_primary_key_constraints(
+            spark=spark,
+            table_name=current_name,
+            primary_keys=primary_keys,
+            timeseries_column=timeseries_column,
+        )
 
     return {
         "table_base": table_base,
@@ -165,6 +284,9 @@ def publish_table(
         "current_table": current_name,
         "run_id": rid,
         "current_mode": current_mode,
+        "primary_keys": _normalize_cols(primary_keys),
+        "timeseries_column": timeseries_column,
+        "snapshot_constraints": snapshot_constraints,
     }
 
 
@@ -199,7 +321,120 @@ def read_current_table(*, spark, table_base: str):
 
 # COMMAND ----------
 
-def build_model_name(subject: str, analysis_name: str, catalog: str = "uat_analytics") -> str:
+def get_feature_engineering_client():
+    from databricks.feature_engineering import FeatureEngineeringClient
+
+    return FeatureEngineeringClient()
+
+
+# COMMAND ----------
+
+def _normalize_lookup_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    out = dict(spec)
+    required = {"table_name", "lookup_key"}
+    missing = [k for k in required if not out.get(k)]
+    if missing:
+        raise ValueError(f"Feature lookup spec missing required keys: {missing}. Spec={spec}")
+    return out
+
+
+# COMMAND ----------
+
+def build_feature_lookups(
+    *,
+    primary_table: str,
+    primary_lookup_key: str | list[str] | tuple[str, ...],
+    primary_feature_names: list[str] | None = None,
+    secondary_lookups: list[dict[str, Any]] | None = None,
+    primary_timestamp_lookup_key: str | None = None,
+):
+    """
+    Build FeatureLookup list from one primary feature table and optional secondary tables.
+    """
+    from databricks.feature_engineering import FeatureLookup
+
+    lookups = [
+        FeatureLookup(
+            table_name=primary_table,
+            lookup_key=primary_lookup_key,
+            feature_names=primary_feature_names,
+            timestamp_lookup_key=primary_timestamp_lookup_key,
+        )
+    ]
+
+    for raw in (secondary_lookups or []):
+        spec = _normalize_lookup_spec(raw)
+        lookups.append(
+            FeatureLookup(
+                table_name=spec["table_name"],
+                lookup_key=spec["lookup_key"],
+                feature_names=spec.get("feature_names"),
+                rename_outputs=spec.get("rename_outputs"),
+                timestamp_lookup_key=spec.get("timestamp_lookup_key"),
+            )
+        )
+    return lookups
+
+
+# COMMAND ----------
+
+def create_feature_training_set(
+    *,
+    fe_client,
+    entity_df,
+    primary_table: str,
+    primary_lookup_key: str | list[str] | tuple[str, ...],
+    primary_feature_names: list[str] | None = None,
+    secondary_lookups: list[dict[str, Any]] | None = None,
+    label: str | None = None,
+    exclude_columns: list[str] | None = None,
+    timestamp_lookup_key: str | None = None,
+):
+    lookups = build_feature_lookups(
+        primary_table=primary_table,
+        primary_lookup_key=primary_lookup_key,
+        primary_feature_names=primary_feature_names,
+        secondary_lookups=secondary_lookups,
+        primary_timestamp_lookup_key=timestamp_lookup_key,
+    )
+    return fe_client.create_training_set(
+        df=entity_df,
+        feature_lookups=lookups,
+        label=label,
+        exclude_columns=exclude_columns or [],
+    )
+
+
+# COMMAND ----------
+
+def log_model_with_feature_lineage(
+    *,
+    fe_client,
+    model,
+    training_set,
+    registered_model_name: str,
+    flavor,
+    artifact_path: str = "model",
+    signature=None,
+    input_example=None,
+    extra_kwargs: dict[str, Any] | None = None,
+):
+    kwargs = dict(extra_kwargs or {})
+    return fe_client.log_model(
+        model=model,
+        artifact_path=artifact_path,
+        flavor=flavor,
+        training_set=training_set,
+        registered_model_name=registered_model_name,
+        signature=signature,
+        input_example=input_example,
+        **kwargs,
+    )
+
+
+# COMMAND ----------
+
+def build_model_name(subject: str, analysis_name: str, catalog: str = "ml_train") -> str:
     subject = subject.strip()
     if subject not in SUBJECT_SPECS:
         raise ValueError(f"Unsupported subject '{subject}'. Supported: {list(SUBJECT_SPECS)}")
@@ -218,7 +453,7 @@ def model_uri(model_name: str, *, version: int | None = None, alias: str | None 
 
 # COMMAND ----------
 
-def load_model(subject: str, analysis_name: str, *, catalog: str = "uat_analytics", version: int | None = None, alias: str | None = None):
+def load_model(subject: str, analysis_name: str, *, catalog: str = "ml_train", version: int | None = None, alias: str | None = None):
     from mlflow import sklearn as mlflow_sklearn
 
     mname = build_model_name(subject=subject, analysis_name=analysis_name, catalog=catalog)
@@ -232,7 +467,7 @@ def get_model(
     subject: str,
     analysis_name: str,
     *,
-    catalog: str = "uat_analytics",
+    catalog: str = "ml_train",
     version: int | None = None,
     alias: str | None = None,
 ):
@@ -677,8 +912,8 @@ def deploy(
     analysis_name: str,
     *,
     spark,
-    source_catalog: str = "uat_analytics",
-    target_catalog: str = "prod_analytics",
+    source_catalog: str = "ml_train",
+    target_catalog: str = "ml_prod",
     dry_run: bool = True,
     clone_mode: str = "DEEP",
     model_version: int | None = None,

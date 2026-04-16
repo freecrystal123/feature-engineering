@@ -1,6 +1,6 @@
 # Databricks notebook source
 # COMMAND ----------
-# MAGIC %run ../../models/utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 
@@ -10,7 +10,7 @@ from pyspark.sql import functions as F
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "uat_analytics")
+dbutils.widgets.text("catalog", "ml_train")
 dbutils.widgets.text("source_schema", "user_segmentation")
 dbutils.widgets.text("target_schema", "cross_sell_mba")
 dbutils.widgets.text("analysis_name", "ols")

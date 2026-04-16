@@ -3,7 +3,7 @@
 # MAGIC %run ../../models/00_config
 
 # COMMAND ----------
-# MAGIC %run ../../models/utils
+# MAGIC %run ../../core/utils
 
 # COMMAND ----------
 
@@ -12,7 +12,7 @@ import pandas as pd
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "uat_analytics")
+dbutils.widgets.text("catalog", "ml_train")
 dbutils.widgets.text("schema", "user_segmentation")
 dbutils.widgets.text("analysis_name", "online_live_casino_ap2")
 dbutils.widgets.text("include_suggestion", "false")

@@ -15,17 +15,26 @@
 # MAGIC %run ./00_config_cross_sell_mba
 
 # COMMAND ----------
-# MAGIC %run ../utils
+# MAGIC %run ../../core/utils
+
+# COMMAND ----------
+# MAGIC %run ../../core/uc_feature_store
+
+# COMMAND ----------
+
+dbutils.widgets.text("candidate_alias", "challenger")
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 from pyspark.ml.fpm import FPGrowth
 import mlflow
+import mlflow.spark
 
 # COMMAND ----------
 
 analysis_name = ANALYSIS_NAMES[MBA_ANALYSIS]
+candidate_alias = dbutils.widgets.get("candidate_alias").strip()
 mlflow.start_run(run_name=f"mba_rules_{analysis_name}")
 mlflow.log_params(
     {
@@ -39,10 +48,30 @@ mlflow.log_params(
         "top_rules": int(MBA_TOP_RULES),
     }
 )
-transactions = read_current_table(
+transactions_base = f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}"
+transactions_feature_table = snapshot_table_name(transactions_base)
+transactions_entity_source_table = current_table_name(transactions_base)
+
+mba_training_set_result = create_training_set_from_feature_tables(
     spark=spark,
-    table_base=f"{T_MBA_TRANSACTIONS_PREFIX}_{analysis_name}",
+    primary_table=transactions_feature_table,
+    entity_source_table=transactions_entity_source_table,
+    entity_keys=["unique_user_id", "lookback_days"],
+    primary_feature_names=[
+        "items",
+        "lookback_days",
+        "num_items",
+        "casino_items_count",
+        "sports_items_count",
+        "is_cross_platform_user",
+    ],
+    secondary_lookups=[],
+    label=None,
+    exclude_columns=[],
+    entity_timestamp_col="run_ts",
 )
+
+transactions = mba_training_set_result["training_set"].load_df()
 
 # COMMAND ----------
 
@@ -293,7 +322,7 @@ def run_window_mba(tx_df, lookback_days: int):
     )
 
     if train_df.limit(1).count() == 0:
-        return None, None, None
+        return None, None, None, None
 
     try:
         fp = FPGrowth(
@@ -303,7 +332,8 @@ def run_window_mba(tx_df, lookback_days: int):
         )
         model = fp.fit(train_df)
         rules = model.associationRules.select("antecedent", "consequent", "support", "confidence", "lift")
-        return _prepare_rules_dataframe(rules, lookback_days)
+        rules_ranked, cross_rules, focus_rules = _prepare_rules_dataframe(rules, lookback_days)
+        return rules_ranked, cross_rules, focus_rules, model
     except Exception as e:
         err = str(e)
         if ("CONNECT_ML.UNSUPPORTED_EXCEPTION" in err) or ("FPGrowth algorithm is not supported" in err):
@@ -311,7 +341,8 @@ def run_window_mba(tx_df, lookback_days: int):
                 f"FPGrowth unsupported for lookback={lookback_days} in Spark Connect mode. "
                 "Falling back to Spark pairwise rules (A -> B)."
             )
-            return _run_window_pairwise_spark(train_df, lookback_days)
+            rules_ranked, cross_rules, focus_rules = _run_window_pairwise_spark(train_df, lookback_days)
+            return rules_ranked, cross_rules, focus_rules, None
         raise
 
 # COMMAND ----------
@@ -319,9 +350,10 @@ def run_window_mba(tx_df, lookback_days: int):
 all_rules = None
 all_cross_rules = None
 all_focus_rules = None
+model_for_registry = None
 
 for d in MBA_LOOKBACK_DAYS_LIST:
-    rules_df, cross_df, focus_df = run_window_mba(transactions, int(d))
+    rules_df, cross_df, focus_df, fp_model = run_window_mba(transactions, int(d))
 
     if rules_df is None:
         print(f"No rules generated for lookback={d} days. Check data volume/thresholds.")
@@ -337,6 +369,10 @@ for d in MBA_LOOKBACK_DAYS_LIST:
         all_rules = all_rules.unionByName(rules_df, allowMissingColumns=True)
         all_cross_rules = all_cross_rules.unionByName(cross_df, allowMissingColumns=True)
         all_focus_rules = all_focus_rules.unionByName(focus_df, allowMissingColumns=True)
+
+    # Prefer registering the model from the largest lookback window.
+    if (fp_model is not None) and (int(d) == int(max(MBA_LOOKBACK_DAYS_LIST))):
+        model_for_registry = fp_model
 
 if all_rules is None:
     raise ValueError("No MBA rules were generated. Check mba_transactions input and thresholds.")
@@ -386,6 +422,48 @@ mlflow.log_metrics(
         "focus_rules_rows": float(all_focus_rules.count()),
     }
 )
+
+if model_for_registry is not None:
+    model_name = build_model_name(
+        subject=SUBJECT_NAME,
+        analysis_name=analysis_name,
+        catalog=WRITE_CATALOG,
+    )
+    log_model_with_feature_lineage(
+        fe_client=get_feature_engineering_client(),
+        model=model_for_registry,
+        training_set=mba_training_set_result["training_set"],
+        registered_model_name=model_name,
+        flavor=mlflow.spark,
+        artifact_path="model",
+    )
+
+    run_id = mlflow.active_run().info.run_id
+    candidate = register_candidate(
+        model_name=model_name,
+        run_id=run_id,
+        alias=candidate_alias,
+        tags={
+            "analysis": analysis_name,
+            "governance_status": "candidate",
+            "subject": SUBJECT_NAME,
+        },
+    )
+    mlflow.log_params(
+        {
+            "registered_model_name": model_name,
+            "candidate_alias": candidate_alias,
+            "candidate_version": int(candidate["version"]),
+        }
+    )
+else:
+    mlflow.log_params(
+        {
+            "registered_model_name": "skipped",
+            "model_registration_reason": "fpgrowth_unavailable_in_runtime",
+        }
+    )
+
 mlflow.end_run()
 
 # COMMAND ----------
