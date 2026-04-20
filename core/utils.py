@@ -472,18 +472,88 @@ def get_model(
     alias: str | None = None,
 ):
     """
-    Load a model with sklearn flavor first and fallback to pyfunc wrapped sklearn model.
+    Load a model with sklearn flavor first and fallback to pyfunc wrappers.
     """
     import mlflow
+    import inspect
 
     mname = build_model_name(subject=subject, analysis_name=analysis_name, catalog=catalog)
     muri = model_uri(mname, version=version, alias=alias)
 
+    def _is_sklearn_like(obj) -> bool:
+        mod = getattr(getattr(obj, "__class__", None), "__module__", "") or ""
+        return mod.startswith("sklearn.")
+
+    def _can_predict(obj) -> bool:
+        return callable(getattr(obj, "predict", None))
+
+    def _unwrap_model_object(obj):
+        if obj is None:
+            return None
+
+        visited: set[int] = set()
+        queue = [obj]
+        candidate_attrs = (
+            "model",
+            "_model",
+            "wrapped_model",
+            "sk_model",
+            "_sk_model",
+            "sklearn_model",
+            "prediction_model",
+            "python_model",
+        )
+
+        while queue:
+            cur = queue.pop(0)
+            if cur is None:
+                continue
+            cur_id = id(cur)
+            if cur_id in visited:
+                continue
+            visited.add(cur_id)
+
+            if _is_sklearn_like(cur) and _can_predict(cur):
+                return cur
+
+            for attr in candidate_attrs:
+                nxt = getattr(cur, attr, None)
+                if nxt is not None and id(nxt) not in visited:
+                    queue.append(nxt)
+
+        return obj
+
     try:
-        return mlflow.sklearn.load_model(muri)
+        model = mlflow.sklearn.load_model(muri)
+        return _unwrap_model_object(model)
     except Exception:
         pyfunc_model = mlflow.pyfunc.load_model(muri)
-        return pyfunc_model._model_impl.python_model.model
+        impl = getattr(pyfunc_model, "_model_impl", None)
+        python_model = getattr(impl, "python_model", None) if impl is not None else None
+
+        for candidate in (
+            pyfunc_model,
+            impl,
+            python_model,
+            getattr(python_model, "model", None) if python_model is not None else None,
+            getattr(impl, "model", None) if impl is not None else None,
+        ):
+            unwrapped = _unwrap_model_object(candidate)
+            if _is_sklearn_like(unwrapped) and _can_predict(unwrapped):
+                return unwrapped
+
+        if _can_predict(pyfunc_model):
+            sig = inspect.signature(pyfunc_model.predict)
+            if "params" in sig.parameters:
+                class _PyfuncCompat:
+                    def __init__(self, m):
+                        self._m = m
+
+                    def predict(self, X):
+                        return self._m.predict(X, params=None)
+
+                return _PyfuncCompat(pyfunc_model)
+        return pyfunc_model
 
 
 # COMMAND ----------
@@ -840,12 +910,225 @@ def write_report_with_single_backup(report_path: str, content: str) -> dict[str,
 
 # COMMAND ----------
 
+def _resolve_source_model_uri(
+    *,
+    source_model: str,
+    model_version: int | None,
+    model_alias: str | None,
+):
+    client = _mlflow_client()
+    if model_version is not None:
+        resolved_version = int(model_version)
+    else:
+        resolved_version = _resolve_model_version(
+            source_model,
+            alias=model_alias,
+        )
+    return {
+        "source_uri": model_uri(source_model, version=resolved_version),
+        "resolved_version": resolved_version,
+        "client": client,
+    }
+
+
+# COMMAND ----------
+
+def _import_mlflow_flavor(flavor_name: str):
+    name = str(flavor_name).strip().lower()
+    if name == "sklearn":
+        from mlflow import sklearn as mlflow_flavor
+        loader = mlflow_flavor.load_model
+        return mlflow_flavor, loader
+    if name == "spark":
+        from mlflow import spark as mlflow_flavor
+        loader = mlflow_flavor.load_model
+        return mlflow_flavor, loader
+    raise ValueError(f"Unsupported flavor '{flavor_name}'. Supported: sklearn, spark")
+
+
+# COMMAND ----------
+
+def _as_lookup_key(keys: tuple[str, ...]):
+    if len(keys) == 1:
+        return keys[0]
+    return list(keys)
+
+
+# COMMAND ----------
+
+def _feature_rebind_primary_feature_names(*, spark, table_name: str, spec) -> list[str]:
+    if spec.feature_names:
+        return list(spec.feature_names)
+
+    key_cols = set(spec.entity_keys)
+    metadata_cols = set(spec.metadata_columns)
+    excluded = key_cols | metadata_cols
+    if spec.label_col:
+        excluded.add(spec.label_col)
+
+    candidate_cols = []
+    for f in spark.table(table_name).schema.fields:
+        if f.name in excluded:
+            continue
+        candidate_cols.append(f.name)
+    return candidate_cols
+
+
+# COMMAND ----------
+
+def _relog_model_with_feature_rebinding(
+    *,
+    spark,
+    source_model: str,
+    target_model: str,
+    model_version: int | None,
+    model_alias: str | None,
+    analysis_name: str,
+    target_schema: str,
+    feature_rebind_spec,
+    dry_run: bool,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "source_model": source_model,
+        "target_model": target_model,
+        "copied": False,
+        "rebound_feature_lineage": True,
+        "reason": None,
+    }
+
+    source_info = _resolve_source_model_uri(
+        source_model=source_model,
+        model_version=model_version,
+        model_alias=model_alias,
+    )
+    result["source_uri"] = source_info["source_uri"]
+    result["source_version"] = int(source_info["resolved_version"])
+
+    if dry_run:
+        result["copied"] = True
+        result["reason"] = "dry_run"
+        result["target_feature_table"] = snapshot_table_name(
+            f"{target_schema}.{feature_rebind_spec.feature_table_template.format(analysis=analysis_name)}"
+        )
+        return result
+
+    client = source_info["client"]
+    try:
+        client.get_registered_model(target_model)
+    except Exception:
+        client.create_registered_model(target_model)
+
+    target_feature_base = f"{target_schema}.{feature_rebind_spec.feature_table_template.format(analysis=analysis_name)}"
+    target_primary_table = snapshot_table_name(target_feature_base)
+    target_entity_source = (
+        current_table_name(target_feature_base)
+        if bool(feature_rebind_spec.use_current_as_entity_source)
+        else target_primary_table
+    )
+    if not spark.catalog.tableExists(target_primary_table):
+        raise ValueError(
+            f"Feature-rebind deploy failed: target feature table not found: '{target_primary_table}'. "
+            "Run feature engineering in target environment first."
+        )
+    if not spark.catalog.tableExists(target_entity_source):
+        raise ValueError(
+            f"Feature-rebind deploy failed: entity source table not found: '{target_entity_source}'. "
+            "Run feature engineering in target environment first."
+        )
+
+    entity_cols = list(feature_rebind_spec.entity_keys)
+    if feature_rebind_spec.entity_timestamp_col and feature_rebind_spec.entity_timestamp_col not in entity_cols:
+        entity_cols.append(feature_rebind_spec.entity_timestamp_col)
+
+    entity_df = (
+        spark.table(target_entity_source)
+        .select(*entity_cols)
+        .dropDuplicates(entity_cols)
+    )
+
+    primary_feature_names = _feature_rebind_primary_feature_names(
+        spark=spark,
+        table_name=target_primary_table,
+        spec=feature_rebind_spec,
+    )
+    if not primary_feature_names:
+        raise ValueError(
+            f"No feature columns were inferred for target feature table '{target_primary_table}'."
+        )
+
+    fe_client = get_feature_engineering_client()
+    training_set = create_feature_training_set(
+        fe_client=fe_client,
+        entity_df=entity_df,
+        primary_table=target_primary_table,
+        primary_lookup_key=_as_lookup_key(tuple(feature_rebind_spec.entity_keys)),
+        primary_feature_names=primary_feature_names,
+        secondary_lookups=[],
+        label=feature_rebind_spec.label_col,
+        exclude_columns=[],
+        timestamp_lookup_key=feature_rebind_spec.entity_timestamp_col,
+    )
+
+    mlflow_flavor, loader = _import_mlflow_flavor(feature_rebind_spec.flavor)
+    source_model_obj = loader(source_info["source_uri"])
+
+    import mlflow
+    source_pyfunc = mlflow.pyfunc.load_model(source_info["source_uri"])
+    source_signature = getattr(getattr(source_pyfunc, "metadata", None), "signature", None)
+
+    with mlflow.start_run(run_name=f"deploy_rebind_{analysis_name}_{target_model.split('.')[-1]}"):
+        mlflow.log_params(
+            {
+                "deploy_mode": "relog_with_feature_rebinding",
+                "source_model": source_model,
+                "target_model": target_model,
+                "source_model_uri": source_info["source_uri"],
+                "target_primary_feature_table": target_primary_table,
+                "target_entity_source_table": target_entity_source,
+                "feature_rebind_flavor": feature_rebind_spec.flavor,
+                "feature_count": len(primary_feature_names),
+            }
+        )
+
+        model_info = log_model_with_feature_lineage(
+            fe_client=fe_client,
+            model=source_model_obj,
+            training_set=training_set,
+            registered_model_name=target_model,
+            flavor=mlflow_flavor,
+            artifact_path="model",
+            signature=source_signature,
+            input_example=None,
+            extra_kwargs={},
+        )
+        run_id = mlflow.active_run().info.run_id
+
+    target_version = _resolve_model_version(target_model, run_id=run_id)
+    result["copied"] = True
+    result["target_version"] = int(target_version)
+    result["target_feature_table"] = target_primary_table
+    result["target_entity_source_table"] = target_entity_source
+    result["model_info"] = str(model_info)
+
+    if model_alias and result["target_version"] is not None:
+        client.set_registered_model_alias(target_model, model_alias, int(result["target_version"]))
+        result["alias_set"] = model_alias
+
+    return result
+
+
+# COMMAND ----------
+
 def _deploy_model(
     source_model: str,
     target_model: str,
     model_version: int | None,
     model_alias: str | None,
     dry_run: bool,
+    spark=None,
+    analysis_name: str | None = None,
+    target_schema: str | None = None,
+    feature_rebind_spec=None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "source_model": source_model,
@@ -867,6 +1150,23 @@ def _deploy_model(
     except Exception as e:
         result["reason"] = f"source model not found: {e}"
         return result
+
+    if feature_rebind_spec is not None:
+        if spark is None or analysis_name is None or target_schema is None:
+            raise ValueError(
+                "Feature-rebind deploy requires spark, analysis_name and target_schema."
+            )
+        return _relog_model_with_feature_rebinding(
+            spark=spark,
+            source_model=source_model,
+            target_model=target_model,
+            model_version=model_version,
+            model_alias=model_alias,
+            analysis_name=analysis_name,
+            target_schema=target_schema,
+            feature_rebind_spec=feature_rebind_spec,
+            dry_run=dry_run,
+        )
 
     if dry_run:
         result["copied"] = True
@@ -1082,6 +1382,10 @@ def deploy(
             model_version=model_version,
             model_alias=model_alias,
             dry_run=dry_run,
+            spark=spark,
+            analysis_name=analysis_name,
+            target_schema=target_schema,
+            feature_rebind_spec=spec.feature_rebind,
         )
 
     if run_smoke_tests and (not dry_run):

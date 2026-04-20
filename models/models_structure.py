@@ -7,12 +7,33 @@ from dataclasses import dataclass
 # COMMAND ----------
 
 @dataclass(frozen=True)
+class FeatureRebindSpec:
+    feature_table_template: str
+    entity_keys: tuple[str, ...]
+    entity_timestamp_col: str | None = None
+    label_col: str | None = None
+    flavor: str = "sklearn"
+    use_current_as_entity_source: bool = True
+    metadata_columns: tuple[str, ...] = (
+        "run_id",
+        "run_ts",
+        "ref_date",
+        "analysis_name",
+        "created_at",
+    )
+    feature_names: tuple[str, ...] | None = None
+
+
+# COMMAND ----------
+
+@dataclass(frozen=True)
 class SubjectSpec:
     schema: str
     report_folder: str
     table_templates: tuple[str, ...]
     model_template: str | None = None
     report_templates: tuple[str, ...] = ()
+    feature_rebind: FeatureRebindSpec | None = None
 
 
 # COMMAND ----------
@@ -46,6 +67,26 @@ SUBJECT_SPECS: dict[str, SubjectSpec] = {
         model_template="mdl_{analysis}",
         report_templates=(
             "mba_rules_report_{analysis}.html",
+        ),
+    ),
+    "reference_ml_template": SubjectSpec(
+        schema="reference_ml_template",
+        report_folder="reports",
+        table_templates=(
+            "feat_{analysis}",
+            "pred_{analysis}",
+        ),
+        model_template="mdl_{analysis}",
+        report_templates=(
+            "reference_report_{analysis}.html",
+        ),
+        feature_rebind=FeatureRebindSpec(
+            feature_table_template="feat_{analysis}",
+            entity_keys=("unique_user_id",),
+            entity_timestamp_col="run_ts",
+            label_col="label_active_7d",
+            flavor="sklearn",
+            use_current_as_entity_source=True,
         ),
     ),
 }

@@ -6,8 +6,8 @@ variables:
     description: Environment name
     default: train
   analysis_cluster_id:
-    description: Existing cluster id for Falaj Analysis cluster
-    default: 1103-212813-x7lxbe2j
+    description: Existing cluster id for Machine Learning Cluster
+    default: 0417-232722-qblfgc6k
   training_schedule_pause_status:
     description: Pause status for training cadence jobs
     default: PAUSED

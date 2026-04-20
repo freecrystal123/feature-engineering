@@ -11,7 +11,7 @@ targets:
       root_path: /Workspace/falaj-machine-learning/train
     variables:
       environment: train
-      analysis_cluster_id: 1103-212813-x7lxbe2j
+      analysis_cluster_id: 0417-232722-qblfgc6k
       training_schedule_pause_status: UNPAUSED
       prediction_schedule_pause_status: PAUSED
     resources:
