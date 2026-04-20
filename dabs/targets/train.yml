@@ -5,7 +5,7 @@ targets:
       trigger_pause_status: PAUSED
       tags:
         deployment: train
-        project: falaj-machine-learning
+        project: falaj-machine-learning (feature store)
     workspace:
       host: https://adb-1817635743983490.10.azuredatabricks.net/
       root_path: /Workspace/falaj-machine-learning/train
