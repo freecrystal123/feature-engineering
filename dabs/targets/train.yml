@@ -17,7 +17,7 @@ targets:
     resources:
       jobs:
         evaluator_validate:
-          name: "[OPS_ML] evaluator_validate"
+          name: "[OPS] evaluator_validate"
           tags:
             job_type: ops
             flow: evaluator
@@ -27,8 +27,8 @@ targets:
                 notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_validate
                 source: WORKSPACE
                 base_parameters:
-                  subject: user_segmentation
-                  analysis_name: analysis_1
+                  subject: reference_ml_template
+                  analysis_name: baseline
                   model_catalog: ml_train
                   candidate_alias: challenger
                   required_signature: "true"
@@ -37,7 +37,7 @@ targets:
             enabled: true
 
         evaluator_deploy:
-          name: "[OPS_ML] evaluator_deploy"
+          name: "[OPS] evaluator_deploy"
           tags:
             job_type: ops
             flow: evaluator
@@ -47,8 +47,8 @@ targets:
                 notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_deploy
                 source: WORKSPACE
                 base_parameters:
-                  subject: user_segmentation
-                  analysis_name: analysis_1
+                  subject: reference_ml_template
+                  analysis_name: baseline
                   source_catalog: ml_train
                   target_catalog: ml_prod
                   source_alias: challenger

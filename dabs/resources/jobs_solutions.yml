@@ -36,6 +36,7 @@ resources:
             base_parameters:
               analysis_id: all
               model_alias: challenger
+              model_catalog: ml_train
               use_score_batch: "true"
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: html_report
@@ -76,6 +77,7 @@ resources:
             base_parameters:
               analysis_id: all
               model_alias: champion
+              model_catalog: ml_train
               use_score_batch: "true"
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: html_report

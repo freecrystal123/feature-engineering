@@ -198,7 +198,12 @@ def _ensure_uc_primary_key_constraints(
         # UC raises when the PK already exists; treat as idempotent.
         err = str(e)
         lower_err = err.lower()
-        already_exists = ("already exists" in lower_err) or ("duplicate constraint" in lower_err)
+        already_exists = (
+            ("already exists" in lower_err)
+            or ("duplicate constraint" in lower_err)
+            or ("resource_already_exists.uc_child_columns_already_exist_in_primary_key_or_unique_constraint" in lower_err)
+            or ("already has a primary key constraint" in lower_err)
+        )
         if not already_exists:
             raise
         return {
@@ -863,10 +868,11 @@ def run_deploy_smoke_tests(
         )
 
     model_plan = deploy_plan.get("model")
-    if model_plan and model_plan.get("target_model"):
+    if model_plan and (model_plan.get("target_model") or model_plan.get("smoke_model")):
+        model_name_for_smoke = model_plan.get("smoke_model") or model_plan.get("target_model")
         results.append(
             smoke_test_model(
-                model_name=model_plan["target_model"],
+                model_name=model_name_for_smoke,
                 alias=model_alias,
                 required_signature=True,
             )
@@ -944,6 +950,82 @@ def _import_mlflow_flavor(flavor_name: str):
         loader = mlflow_flavor.load_model
         return mlflow_flavor, loader
     raise ValueError(f"Unsupported flavor '{flavor_name}'. Supported: sklearn, spark")
+
+
+# COMMAND ----------
+
+def _load_model_for_feature_rebind(*, source_uri: str, preferred_flavor: str):
+    """
+    Load source model object for rebind, tolerating FE-wrapped pyfunc-only registrations.
+    Returns: (mlflow_flavor_module, model_object, resolved_flavor_name)
+    """
+    import mlflow
+
+    preferred = str(preferred_flavor).strip().lower()
+
+    if preferred == "spark":
+        from mlflow import spark as mlflow_spark
+        return mlflow_spark, mlflow_spark.load_model(source_uri), "spark"
+
+    # Preferred path for sklearn-native models.
+    from mlflow import sklearn as mlflow_sklearn
+    try:
+        return mlflow_sklearn, mlflow_sklearn.load_model(source_uri), "sklearn"
+    except Exception:
+        pass
+
+    # Fallback: unwrap sklearn estimator from FE/pyfunc wrappers.
+    pyfunc_model = mlflow.pyfunc.load_model(source_uri)
+    impl = getattr(pyfunc_model, "_model_impl", None)
+    python_model = getattr(impl, "python_model", None) if impl is not None else None
+
+    def _is_sklearn_like(obj) -> bool:
+        mod = getattr(getattr(obj, "__class__", None), "__module__", "") or ""
+        return mod.startswith("sklearn.")
+
+    def _can_predict(obj) -> bool:
+        return callable(getattr(obj, "predict", None))
+
+    visited: set[int] = set()
+    queue = [
+        impl,
+        python_model,
+        getattr(python_model, "model", None) if python_model is not None else None,
+        getattr(impl, "model", None) if impl is not None else None,
+        getattr(impl, "sklearn_model", None) if impl is not None else None,
+    ]
+    candidate_attrs = (
+        "model",
+        "_model",
+        "wrapped_model",
+        "sk_model",
+        "_sk_model",
+        "sklearn_model",
+        "prediction_model",
+        "python_model",
+    )
+
+    while queue:
+        cur = queue.pop(0)
+        if cur is None:
+            continue
+        cur_id = id(cur)
+        if cur_id in visited:
+            continue
+        visited.add(cur_id)
+
+        if _is_sklearn_like(cur) and _can_predict(cur):
+            return mlflow_sklearn, cur, "sklearn_unwrapped"
+
+        for attr in candidate_attrs:
+            nxt = getattr(cur, attr, None)
+            if nxt is not None and id(nxt) not in visited:
+                queue.append(nxt)
+
+    raise ValueError(
+        "Feature-rebind deploy could not load source model as native sklearn object. "
+        f"source_uri={source_uri}, preferred_flavor={preferred_flavor}"
+    )
 
 
 # COMMAND ----------
@@ -1036,14 +1118,26 @@ def _relog_model_with_feature_rebinding(
             "Run feature engineering in target environment first."
         )
 
+    source_entity_df = spark.table(target_entity_source)
+    source_entity_cols = set(source_entity_df.columns)
+
     entity_cols = list(feature_rebind_spec.entity_keys)
+    dedup_cols = list(feature_rebind_spec.entity_keys)
     if feature_rebind_spec.entity_timestamp_col and feature_rebind_spec.entity_timestamp_col not in entity_cols:
         entity_cols.append(feature_rebind_spec.entity_timestamp_col)
+        dedup_cols.append(feature_rebind_spec.entity_timestamp_col)
+
+    # Label is optional during rebind: include it only when available.
+    label_for_rebind = None
+    if feature_rebind_spec.label_col and feature_rebind_spec.label_col in source_entity_cols:
+        label_for_rebind = feature_rebind_spec.label_col
+        if label_for_rebind not in entity_cols:
+            entity_cols.append(label_for_rebind)
 
     entity_df = (
-        spark.table(target_entity_source)
+        source_entity_df
         .select(*entity_cols)
-        .dropDuplicates(entity_cols)
+        .dropDuplicates(dedup_cols)
     )
 
     primary_feature_names = _feature_rebind_primary_feature_names(
@@ -1064,13 +1158,15 @@ def _relog_model_with_feature_rebinding(
         primary_lookup_key=_as_lookup_key(tuple(feature_rebind_spec.entity_keys)),
         primary_feature_names=primary_feature_names,
         secondary_lookups=[],
-        label=feature_rebind_spec.label_col,
+        label=label_for_rebind,
         exclude_columns=[],
         timestamp_lookup_key=feature_rebind_spec.entity_timestamp_col,
     )
 
-    mlflow_flavor, loader = _import_mlflow_flavor(feature_rebind_spec.flavor)
-    source_model_obj = loader(source_info["source_uri"])
+    mlflow_flavor, source_model_obj, resolved_flavor_name = _load_model_for_feature_rebind(
+        source_uri=source_info["source_uri"],
+        preferred_flavor=feature_rebind_spec.flavor,
+    )
 
     import mlflow
     source_pyfunc = mlflow.pyfunc.load_model(source_info["source_uri"])
@@ -1086,7 +1182,9 @@ def _relog_model_with_feature_rebinding(
                 "target_primary_feature_table": target_primary_table,
                 "target_entity_source_table": target_entity_source,
                 "feature_rebind_flavor": feature_rebind_spec.flavor,
+                "feature_rebind_resolved_flavor": resolved_flavor_name,
                 "feature_count": len(primary_feature_names),
+                "feature_rebind_label": str(label_for_rebind),
             }
         )
 
@@ -1376,17 +1474,30 @@ def deploy(
         model_name = spec.model_template.format(analysis=analysis_name)
         source_model = f"{source_schema}.{model_name}"
         target_model = f"{target_schema}.{model_name}"
-        plan["model"] = _deploy_model(
-            source_model=source_model,
-            target_model=target_model,
-            model_version=model_version,
-            model_alias=model_alias,
-            dry_run=dry_run,
-            spark=spark,
-            analysis_name=analysis_name,
-            target_schema=target_schema,
-            feature_rebind_spec=spec.feature_rebind,
-        )
+        # New architecture: do not copy/relog models across catalogs.
+        # Promotion (challenger -> champion) is handled on source catalog by evaluator.
+        if source_catalog != target_catalog:
+            plan["model"] = {
+                "mode": "alias_promotion_only",
+                "source_model": source_model,
+                "target_model": target_model,
+                "smoke_model": source_model,
+                "copied": False,
+                "executed": False,
+                "reason": "cross-catalog model deployment disabled by architecture",
+            }
+        else:
+            plan["model"] = _deploy_model(
+                source_model=source_model,
+                target_model=target_model,
+                model_version=model_version,
+                model_alias=model_alias,
+                dry_run=dry_run,
+                spark=spark,
+                analysis_name=analysis_name,
+                target_schema=target_schema,
+                feature_rebind_spec=spec.feature_rebind,
+            )
 
     if run_smoke_tests and (not dry_run):
         plan["smoke_tests"] = run_deploy_smoke_tests(

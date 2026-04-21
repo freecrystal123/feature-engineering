@@ -16,6 +16,7 @@
 
 dbutils.widgets.text("analysis_id", "all")
 dbutils.widgets.text("model_alias", DEFAULT_CHAMPION_ALIAS)
+dbutils.widgets.text("model_catalog", "ml_train")
 dbutils.widgets.text("use_score_batch", "true")
 
 # COMMAND ----------
@@ -26,6 +27,7 @@ from pyspark.sql import functions as F
 
 analysis_id = dbutils.widgets.get("analysis_id").strip()
 model_alias = dbutils.widgets.get("model_alias").strip()
+model_catalog = dbutils.widgets.get("model_catalog").strip()
 use_score_batch = dbutils.widgets.get("use_score_batch").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
@@ -70,7 +72,7 @@ def predict_analysis(analysis: str):
     model_name = build_model_name(
         subject=SUBJECT_NAME,
         analysis_name=analysis_name,
-        catalog=WRITE_CATALOG,
+        catalog=model_catalog,
     )
     uri = f"models:/{model_name}@{model_alias}"
 

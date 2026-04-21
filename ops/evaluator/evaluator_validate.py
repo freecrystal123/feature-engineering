@@ -3,8 +3,8 @@
 # MAGIC %run ../../core/utils
 
 # COMMAND ----------
-dbutils.widgets.text("subject", "user_segmentation")
-dbutils.widgets.text("analysis_name", "analysis_1")
+dbutils.widgets.text("subject", "reference_ml_template")
+dbutils.widgets.text("analysis_name", "baseline")
 dbutils.widgets.text("model_catalog", "ml_train")
 dbutils.widgets.text("candidate_alias", "challenger")
 dbutils.widgets.text("required_signature", "true")
