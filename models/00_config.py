@@ -47,10 +47,8 @@ def detect_environment(default: str = "train") -> str:
 
 ENVIRONMENT = detect_environment(default="train")
 
-if ENVIRONMENT == "dev":
-    READ_ENVIRONMENT = "dev"
-else:
-    READ_ENVIRONMENT = "prod"
+# Both dev and train read from production lakehouse layers.
+READ_ENVIRONMENT = "prod"
 
 WRITE_ENVIRONMENT = ENVIRONMENT
 
