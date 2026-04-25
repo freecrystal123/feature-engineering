@@ -1,0 +1,64 @@
+targets:
+  train:
+    presets:
+      name_prefix: "[TRAIN_ML] "
+      trigger_pause_status: PAUSED
+      tags:
+        deployment: train
+        project: falaj-machine-learning (feature store)
+    workspace:
+      host: https://adb-1817635743983490.10.azuredatabricks.net/
+      root_path: /Workspace/falaj-machine-learning/train
+    variables:
+      environment: train
+      analysis_cluster_id: 0417-232722-qblfgc6k
+      training_schedule_pause_status: UNPAUSED
+      prediction_schedule_pause_status: PAUSED
+    resources:
+      jobs:
+        evaluator_validate:
+          name: "[OPS] evaluator_validate"
+          tags:
+            job_type: ops
+            flow: evaluator
+          tasks:
+            - task_key: evaluator_validate
+              notebook_task:
+                notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_validate
+                source: WORKSPACE
+                base_parameters:
+                  subject: reference_ml_template
+                  analysis_name: baseline
+                  model_catalog: ml_train
+                  candidate_alias: challenger
+                  required_signature: "true"
+              existing_cluster_id: ${var.analysis_cluster_id}
+          queue:
+            enabled: true
+
+        evaluator_deploy:
+          name: "[OPS] evaluator_deploy"
+          tags:
+            job_type: ops
+            flow: evaluator
+          tasks:
+            - task_key: evaluator_deploy
+              notebook_task:
+                notebook_path: ${workspace.file_path}/ops/evaluator/evaluator_deploy
+                source: WORKSPACE
+                base_parameters:
+                  subject: reference_ml_template
+                  analysis_name: baseline
+                  source_catalog: ml_train
+                  target_catalog: ml_prod
+                  source_alias: challenger
+                  target_alias: champion
+                  promote_first: "true"
+                  dry_run: "false"
+                  deploy_model: "true"
+                  deploy_tables: "false"
+                  deploy_reports: "false"
+                  run_smoke_tests: "true"
+              existing_cluster_id: ${var.analysis_cluster_id}
+          queue:
+            enabled: true

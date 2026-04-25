@@ -1,0 +1,93 @@
+resources:
+  jobs:
+    reference_template_training:
+      name: reference_template_training
+      tags:
+        solution: reference_ml_template
+        cadence: each_3m
+      schedule:
+        quartz_cron_expression: "0 30 2 1 1/3 ?"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.training_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/reference_ml_template/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_training
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/reference_ml_template/02_model_training
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+              candidate_alias: challenger
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: model_training
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/reference_ml_template/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+              model_alias: challenger
+              model_catalog: ml_train
+              use_score_batch: "true"
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: html_report
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/reference_ml_template/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
+    reference_template_prediction:
+      name: reference_template_prediction
+      tags:
+        solution: reference_ml_template
+        cadence: each_1d
+      schedule:
+        quartz_cron_expression: "0 30 5 * * ?"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.prediction_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/reference_ml_template/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/reference_ml_template/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+              model_alias: champion
+              model_catalog: ml_train
+              use_score_batch: "true"
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: html_report
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/reference_ml_template/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true

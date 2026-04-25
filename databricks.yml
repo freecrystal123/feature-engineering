@@ -1,0 +1,20 @@
+bundle:
+  name: falaj-machine-learning
+
+variables:
+  environment:
+    description: Environment name
+    default: train
+  analysis_cluster_id:
+    description: Existing cluster id for Machine Learning Cluster
+    default: 0417-232722-qblfgc6k
+  training_schedule_pause_status:
+    description: Pause status for training cadence jobs
+    default: PAUSED
+  prediction_schedule_pause_status:
+    description: Pause status for prediction cadence jobs
+    default: PAUSED
+
+include:
+  - dabs/targets/*.yml
+  - dabs/resources/*.yml
