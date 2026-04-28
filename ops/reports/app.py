@@ -325,7 +325,7 @@ def _render_sidebar_menu(entries: list[dict]) -> str:
     options = [item["key"] for item in entries]
     labels = {
         item["key"]: (
-            f"• {item['title']} ({_environment_label(item['environment'])})"
+            f"{item['title']} ({_environment_label(item['environment'])})"
         )
         for item in entries
     }
