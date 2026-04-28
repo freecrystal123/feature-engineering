@@ -1,6 +1,6 @@
 APP_DIR := ops/reports
 WORKSPACE_PATH := /Workspace/Users/aneto@mcorp.ae/test-catalog
-APP_NAME := cross-sell-analysis
+APP_NAME := machine-learning-reports
 
 .PHONY: sync sync-watch deploy deploy-app
 

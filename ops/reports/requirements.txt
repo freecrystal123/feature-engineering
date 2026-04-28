@@ -1,3 +1,4 @@
 streamlit>=1.35,<2
 pandas>=2.0,<3
 databricks-sdk>=0.50,<1
+databricks-sql-connector>=3.0,<4

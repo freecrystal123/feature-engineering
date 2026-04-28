@@ -4,3 +4,13 @@ command:
 env:
   - name: DATABRICKS_ENABLE_EXPERIMENTAL_FILES_API_CLIENT
     value: "true"
+  - name: DATABRICKS_SQL_HTTP_PATH
+    value: "/sql/1.0/warehouses/9f0bdb5fb203e513"
+  - name: MBA_RULES_CROSS_PREFIX
+    value: "prod_analytics.cross_sell_mba.mba_association_rules_cross"
+  - name: MBA_TRANSACTIONS_PREFIX
+    value: "prod_analytics.cross_sell_mba.mba_transactions"
+  - name: MBA_RULES_TABLE
+    value: "prod_analytics.cross_sell_mba.mba_association_rules_cross_ols_current"
+  - name: MBA_TRANSACTIONS_TABLE
+    value: "prod_analytics.cross_sell_mba.mba_transactions_ols_current"
