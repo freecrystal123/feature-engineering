@@ -28,6 +28,7 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_TEXT_PREVIEW_BYTES = 300_000
 NO_SELECTION_KEY = "__none__"
 SIDEBAR_REPORT_KEY = "sidebar_report_radio"
+SIDEBAR_ENV_KEY = "sidebar_reports_environment"
 
 
 def _inject_css() -> None:
@@ -320,18 +321,40 @@ def _render_sidebar_menu(entries: list[dict]) -> str:
         st.session_state[SIDEBAR_REPORT_KEY] = None
         st.rerun()
 
-    st.sidebar.markdown("### Reports")
+    env_options = ["production", "training"]
+    env_labels = {
+        "production": "Production Reports",
+        "training": "Training Reports",
+    }
+    if SIDEBAR_ENV_KEY not in st.session_state:
+        st.session_state[SIDEBAR_ENV_KEY] = "production"
+    if st.session_state[SIDEBAR_ENV_KEY] not in env_options:
+        st.session_state[SIDEBAR_ENV_KEY] = "production"
 
-    options = [item["key"] for item in entries]
+    selected_environment = st.sidebar.selectbox(
+        "Reports",
+        options=env_options,
+        index=env_options.index(str(st.session_state[SIDEBAR_ENV_KEY])),
+        format_func=lambda env: env_labels[str(env)],
+        key=SIDEBAR_ENV_KEY,
+    )
+    filtered_entries = [e for e in entries if str(e.get("environment", "")).lower() == selected_environment]
+
+    options = [item["key"] for item in filtered_entries]
     labels = {
         item["key"]: (
-            f"{item['title']} ({_environment_label(item['environment'])})"
+            item["title"]
         )
-        for item in entries
+        for item in filtered_entries
     }
 
     if SIDEBAR_REPORT_KEY not in st.session_state:
         st.session_state[SIDEBAR_REPORT_KEY] = None
+
+    if not options:
+        st.sidebar.info("No reports available for this environment.")
+        st.session_state[SIDEBAR_REPORT_KEY] = None
+        return NO_SELECTION_KEY
 
     current_value = st.session_state.get(SIDEBAR_REPORT_KEY)
     if current_value not in options:
