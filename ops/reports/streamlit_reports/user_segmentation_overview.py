@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from datetime import date
-
 import pandas as pd
 import streamlit as st
+
+REPORT_META = {
+    "title": "User Segmentation Overview",
+    "schema": "user_segmentation",
+    "environments": ("training", "production"),
+    "description": "Interactive segmentation health summary with trend exploration.",
+}
 
 
 def _sample_frame() -> pd.DataFrame:
@@ -86,4 +91,3 @@ def render(context: dict | None = None) -> None:
     table["month"] = table["month"].dt.date
     table["retention_30d"] = (table["retention_30d"] * 100).round(1).astype(str) + "%"
     st.dataframe(table, use_container_width=True, hide_index=True)
-

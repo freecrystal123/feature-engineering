@@ -3,6 +3,13 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+REPORT_META = {
+    "title": "Cross-sell MBA Explorer",
+    "schema": "cross_sell_mba",
+    "environments": ("training", "production"),
+    "description": "Rule performance explorer with lift and confidence controls.",
+}
+
 
 def _sample_rules() -> pd.DataFrame:
     rows = [
@@ -56,4 +63,3 @@ def render(context: dict | None = None) -> None:
 
     st.markdown("##### Lift by antecedent")
     st.bar_chart(filtered.set_index("antecedent")[["lift"]], use_container_width=True)
-
