@@ -1,0 +1,6 @@
+command:
+  - python
+  - run_app.py
+env:
+  - name: DATABRICKS_ENABLE_EXPERIMENTAL_FILES_API_CLIENT
+    value: "true"
