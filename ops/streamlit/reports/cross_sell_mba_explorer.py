@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import os
 import re
-from urllib.parse import urlparse
 
 import pandas as pd
 import streamlit as st
-from databricks import sql
-from databricks.sdk.core import Config
+
+from core.databricks_query_service import data_select, resolve_sql_http_path
 
 REPORT_META = {
     "title": "Cross-sell MBA Explorer",
@@ -24,14 +23,16 @@ MBA_MIN_ITEMS_PER_USER = 2
 LOOKBACK_WINDOWS = (365, 30)
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.]+$")
 
-
-def _catalog_for_environment(environment: str) -> str:
-    env = str(environment).strip().lower()
-    if env in {"training", "train", "ml_train"}:
-        return "ml_train"
-    if env in {"production", "prod", "ml_prod"}:
-        return "ml_prod"
-    return "ml_prod"
+# Keep MBA global table configuration in Python (not app.yaml).
+MBA_RULES_TABLE_PRODUCTION = (
+    "prod_analytics.cross_sell_mba.mba_association_rules_cross_ols_current"
+)
+MBA_TRANSACTIONS_TABLE_PRODUCTION = (
+    "prod_analytics.cross_sell_mba.mba_transactions_ols_current"
+)
+# Default training to the same source unless dedicated training tables are provided.
+MBA_RULES_TABLE_TRAINING = MBA_RULES_TABLE_PRODUCTION
+MBA_TRANSACTIONS_TABLE_TRAINING = MBA_TRANSACTIONS_TABLE_PRODUCTION
 
 
 def _environment_key(environment: str) -> str:
@@ -43,20 +44,6 @@ def _environment_key(environment: str) -> str:
     return "OTHER"
 
 
-def _schema_for_environment(environment: str, default_schema: str) -> str:
-    env_key = _environment_key(environment)
-    per_env_override = str(os.getenv(f"MBA_SCHEMA_OVERRIDE_{env_key}", "")).strip()
-    global_override = str(os.getenv("MBA_SCHEMA_OVERRIDE", "")).strip()
-    return per_env_override or global_override or default_schema
-
-
-def _catalog_override_for_environment(environment: str, default_catalog: str) -> str:
-    env_key = _environment_key(environment)
-    per_env_override = str(os.getenv(f"MBA_CATALOG_OVERRIDE_{env_key}", "")).strip()
-    global_override = str(os.getenv("MBA_CATALOG_OVERRIDE", "")).strip()
-    return per_env_override or global_override or default_catalog
-
-
 def _analysis_name() -> str:
     override = str(os.getenv("MBA_ANALYSIS_NAME", "")).strip()
     if override:
@@ -64,20 +51,11 @@ def _analysis_name() -> str:
     return ANALYSIS_NAMES.get(MBA_ANALYSIS, "ols")
 
 
-def _table_suffix() -> str:
-    # Supported variants:
-    # - current  -> *_current
-    # - snapshot -> *_snapshot
-    # - analysis -> *_<analysis_name> (legacy notebook behavior, e.g. *_ols)
-    # Any other non-empty value is used as custom suffix.
-    variant = str(os.getenv("MBA_TABLE_VARIANT", "current")).strip().lower()
-    if variant == "current":
-        return "current"
-    if variant == "snapshot":
-        return "snapshot"
-    if variant == "analysis":
-        return _analysis_name()
-    return variant or "current"
+def _default_table_names(environment: str) -> tuple[str, str]:
+    env_key = _environment_key(environment)
+    if env_key == "TRAINING":
+        return MBA_RULES_TABLE_TRAINING, MBA_TRANSACTIONS_TABLE_TRAINING
+    return MBA_RULES_TABLE_PRODUCTION, MBA_TRANSACTIONS_TABLE_PRODUCTION
 
 
 def _safe_table_name(name: str) -> str:
@@ -89,84 +67,28 @@ def _safe_table_name(name: str) -> str:
 
 def _resolve_table_names(context: dict) -> tuple[str, str, str]:
     environment = str(context.get("environment", "production")).strip().lower()
-    default_schema = str(context.get("schema", "cross_sell_mba")).strip().lower() or "cross_sell_mba"
-    schema = _schema_for_environment(environment, default_schema)
     analysis_name = _analysis_name()
-    table_suffix = _table_suffix()
-    catalog = _catalog_override_for_environment(environment, _catalog_for_environment(environment))
+    env_key = _environment_key(environment)
+    default_rules_table, default_transactions_table = _default_table_names(environment)
 
-    default_rules_prefix = f"{catalog}.{schema}.mba_association_rules_cross"
-    default_transactions_prefix = f"{catalog}.{schema}.mba_transactions"
-
-    rules_prefix = str(os.getenv("MBA_RULES_CROSS_PREFIX", default_rules_prefix)).strip()
-    transactions_prefix = str(
-        os.getenv("MBA_TRANSACTIONS_PREFIX", default_transactions_prefix)
+    rules_table_override = str(os.getenv(f"MBA_RULES_TABLE_{env_key}", "")).strip() or str(
+        os.getenv("MBA_RULES_TABLE", "")
     ).strip()
-
-    rules_table_override = str(os.getenv("MBA_RULES_TABLE", "")).strip()
-    transactions_table_override = str(os.getenv("MBA_TRANSACTIONS_TABLE", "")).strip()
+    transactions_table_override = str(
+        os.getenv(f"MBA_TRANSACTIONS_TABLE_{env_key}", "")
+    ).strip() or str(os.getenv("MBA_TRANSACTIONS_TABLE", "")).strip()
 
     rules_table = (
         _safe_table_name(rules_table_override)
         if rules_table_override
-        else _safe_table_name(f"{rules_prefix}_{table_suffix}")
+        else _safe_table_name(default_rules_table)
     )
     transactions_table = (
         _safe_table_name(transactions_table_override)
         if transactions_table_override
-        else _safe_table_name(f"{transactions_prefix}_{table_suffix}")
+        else _safe_table_name(default_transactions_table)
     )
     return rules_table, transactions_table, analysis_name
-
-
-def _resolve_http_path() -> str:
-    for env_name in ("DATABRICKS_SQL_HTTP_PATH", "DATABRICKS_HTTP_PATH"):
-        raw = str(os.getenv(env_name, "")).strip()
-        if not raw:
-            continue
-
-        # If a full HTTP path is provided, use it as-is.
-        if raw.startswith("/"):
-            return raw
-        if raw.startswith("sql/"):
-            return f"/{raw}"
-
-        # Databricks Apps `valueFrom: sql_warehouse` resolves to warehouse ID.
-        # Convert it to the SQL warehouse HTTP path expected by connector.
-        if re.fullmatch(r"[A-Za-z0-9]+", raw):
-            return f"/sql/1.0/warehouses/{raw}"
-
-        return raw
-
-    for env_name in ("DATABRICKS_SQL_WAREHOUSE_ID", "WAREHOUSE_ID"):
-        warehouse_id = str(os.getenv(env_name, "")).strip()
-        if warehouse_id:
-            return f"/sql/1.0/warehouses/{warehouse_id}"
-    return ""
-
-
-@st.cache_resource
-def _get_connection(http_path: str):
-    cfg = Config()
-    raw_host = str(cfg.host).strip()
-    # Defensively normalize host in case cfg.host contains scheme/path (e.g. /oidc).
-    if "://" not in raw_host:
-        raw_host = f"https://{raw_host}"
-    parsed = urlparse(raw_host)
-    host = (parsed.netloc or parsed.path).strip().strip("/")
-    if "/" in host:
-        host = host.split("/", 1)[0]
-    if not host:
-        raise ValueError(
-            "Unable to resolve Databricks server hostname from Config.host. "
-            "Check DATABRICKS_HOST format."
-        )
-    return sql.connect(
-        server_hostname=host,
-        http_path=http_path,
-        credentials_provider=lambda: cfg.authenticate,
-        _use_arrow_native_complex_types=False,
-    )
 
 
 @st.cache_data(ttl=180)
@@ -237,10 +159,7 @@ def _load_rules_dataset(http_path: str, rules_table: str, transactions_table: st
      AND a.antecedent_items = r.antecedent_items
     ORDER BY r.lookback_days DESC, r.lift DESC, r.confidence DESC
     """
-    conn = _get_connection(http_path)
-    with conn.cursor() as cursor:
-        cursor.execute(query)
-        return cursor.fetchall_arrow().to_pandas()
+    return data_select(query=query, http_path=http_path)
 
 
 @st.cache_data(ttl=180)
@@ -263,10 +182,7 @@ def _load_window_mix(http_path: str, transactions_table: str) -> pd.DataFrame:
     WHERE lookback_days IN (30, 365)
     GROUP BY lookback_days
     """
-    conn = _get_connection(http_path)
-    with conn.cursor() as cursor:
-        cursor.execute(query)
-        return cursor.fetchall_arrow().to_pandas()
+    return data_select(query=query, http_path=http_path)
 
 
 def _fmt_pct(value: float) -> str:
@@ -373,7 +289,7 @@ def _apply_filters(rules_df: pd.DataFrame, antecedent_filter: str, consequent_fi
 
 def render(context: dict | None = None) -> None:
     context = context or {}
-    http_path = _resolve_http_path()
+    http_path = resolve_sql_http_path()
     if not http_path:
         st.error(
             "Missing SQL warehouse HTTP path. Set `DATABRICKS_SQL_HTTP_PATH` "

@@ -10,8 +10,8 @@ Unified Databricks App for report browsing in two environments:
 - `app.py`: main catalog UI (single-page)
 - `run_app.py`: Streamlit launcher using `DATABRICKS_APP_PORT`
 - `app.yaml`: Databricks Apps startup config
-- `core_reports/`: core discovery and metadata modules
-- `streamlit_reports/`: interactive Streamlit reports rendered inside catalog
+- `core/`: core discovery and Databricks query modules
+- `reports/`: interactive Streamlit reports rendered inside catalog
 
 ## What the app serves
 
@@ -22,7 +22,7 @@ Core files discovered automatically from Unity Catalog volumes:
 
 Interactive reports discovered automatically from local modules:
 
-- `ops/reports/streamlit_reports/*.py` (except `__init__.py`)
+- `ops/streamlit/reports/*.py` (except `__init__.py`)
 
 ## Environment variables
 
@@ -51,6 +51,6 @@ GRANT READ VOLUME ON CATALOG ml_prod TO `<app-service-principal-id>`;
 ## Deploy
 
 1. Sync source code:
-   - `databricks sync --watch . /Workspace/Users/<user>/falaj-machine-learning/ops/reports`
+   - `databricks sync --watch . /Workspace/Users/<user>/falaj-machine-learning/ops/streamlit`
 2. Deploy app:
-   - `databricks apps deploy ml-reports-catalog --source-code-path /Workspace/Users/<user>/falaj-machine-learning/ops/reports`
+   - `databricks apps deploy ml-reports-catalog --source-code-path /Workspace/Users/<user>/falaj-machine-learning/ops/streamlit`

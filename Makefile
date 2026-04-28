@@ -1,4 +1,4 @@
-APP_DIR := ops/reports
+APP_DIR := ops/streamlit
 WORKSPACE_PATH := /Workspace/Users/aneto@mcorp.ae/test-catalog
 APP_NAME := machine-learning-reports
 

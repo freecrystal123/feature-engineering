@@ -9,8 +9,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-from core_reports.analysis_metadata import analysis_description, analysis_title
-from core_reports.catalog_service import (
+from core.catalog_service import (
     discover_core_reports,
     download_file_bytes,
     parse_catalogs,
@@ -180,6 +179,15 @@ def _humanize_file_title(file_name: str) -> str:
     return " ".join(word.capitalize() for word in cleaned.split()) if cleaned else file_name
 
 
+def _humanize_identifier(value: str) -> str:
+    text = str(value).replace("_", " ").replace("-", " ").strip()
+    return " ".join(word.capitalize() for word in text.split()) if text else "Unknown"
+
+
+def _default_report_description(schema: str) -> str:
+    return f"Operational report for {_humanize_identifier(schema)}."
+
+
 def _environment_label(environment: str) -> str:
     mapping = {
         "training": "Training",
@@ -192,7 +200,7 @@ def _environment_label(environment: str) -> str:
 def _discover_streamlit_rows() -> tuple[list[dict], list[str]]:
     rows: list[dict] = []
     warnings: list[str] = []
-    reports_dir = Path(__file__).resolve().parent / "streamlit_reports"
+    reports_dir = Path(__file__).resolve().parent / "reports"
 
     if not reports_dir.exists():
         return rows, [f"Streamlit reports directory not found: {reports_dir}"]
@@ -201,7 +209,7 @@ def _discover_streamlit_rows() -> tuple[list[dict], list[str]]:
         if report_file.name == "__init__.py" or report_file.name.startswith("_"):
             continue
 
-        module_path = f"streamlit_reports.{report_file.stem}"
+        module_path = f"reports.{report_file.stem}"
         try:
             module = importlib.import_module(module_path)
         except Exception as exc:
@@ -218,8 +226,8 @@ def _discover_streamlit_rows() -> tuple[list[dict], list[str]]:
             metadata = {}
 
         schema = str(metadata.get("schema") or report_file.stem).strip().lower()
-        title = str(metadata.get("title") or analysis_title(report_file.stem))
-        description = str(metadata.get("description") or analysis_description(schema))
+        title = str(metadata.get("title") or _humanize_identifier(report_file.stem))
+        description = str(metadata.get("description") or _default_report_description(schema))
 
         raw_environments = metadata.get("environments", ("training", "production"))
         if isinstance(raw_environments, str):
@@ -274,7 +282,7 @@ def _build_catalog_entries(core_rows: list[dict], streamlit_rows: list[dict]) ->
             {
                 "key": key,
                 "title": title,
-                "description": analysis_description(schema),
+                "description": _default_report_description(schema),
                 "schema": schema,
                 "environment": environment,
                 "environment_label": _environment_label(environment),
@@ -290,13 +298,13 @@ def _build_catalog_entries(core_rows: list[dict], streamlit_rows: list[dict]) ->
         module_path = str(row.get("module_path", ""))
         schema = str(row.get("schema", "")).strip().lower()
         environment = str(row.get("environment", "other")).strip().lower()
-        title = str(row.get("report_title", "")).strip() or analysis_title(schema)
+        title = str(row.get("report_title", "")).strip() or _humanize_identifier(schema)
         key = f"streamlit::{environment}::{schema}::{module_path}"
         entries.append(
             {
                 "key": key,
                 "title": title,
-                "description": str(row.get("description", "")).strip() or analysis_description(schema),
+                "description": str(row.get("description", "")).strip() or _default_report_description(schema),
                 "schema": schema,
                 "environment": environment,
                 "environment_label": _environment_label(environment),
@@ -307,7 +315,7 @@ def _build_catalog_entries(core_rows: list[dict], streamlit_rows: list[dict]) ->
 
     entries.sort(
         key=lambda item: (
-            analysis_title(item["schema"]).lower(),
+            _humanize_identifier(item["schema"]).lower(),
             item["title"].lower(),
             item["environment"].lower(),
             item["source_type"].lower(),
@@ -317,7 +325,7 @@ def _build_catalog_entries(core_rows: list[dict], streamlit_rows: list[dict]) ->
 
 
 def _render_sidebar_menu(entries: list[dict]) -> str:
-    if st.sidebar.button("🏠 Home", use_container_width=True):
+    if st.sidebar.button("Home", use_container_width=True):
         st.session_state[SIDEBAR_REPORT_KEY] = None
         st.rerun()
 
