@@ -22,7 +22,7 @@ Core files discovered automatically from Unity Catalog volumes:
 
 Interactive reports discovered automatically from local modules:
 
-- `ops/streamlit/reports/*.py` (except `__init__.py`)
+- `streamlit/reports/*.py` (except `__init__.py`)
 
 ## Environment variables
 
@@ -51,6 +51,6 @@ GRANT READ VOLUME ON CATALOG ml_prod TO `<app-service-principal-id>`;
 ## Deploy
 
 1. Sync source code:
-   - `databricks sync --watch . /Workspace/Users/<user>/falaj-machine-learning/ops/streamlit`
+   - `databricks sync --watch . /Workspace/Users/<user>/falaj-machine-learning/streamlit`
 2. Deploy app:
-   - `databricks apps deploy ml-reports-catalog --source-code-path /Workspace/Users/<user>/falaj-machine-learning/ops/streamlit`
+   - `databricks apps deploy machine-learning-reports --source-code-path /Workspace/Users/<user>/falaj-machine-learning/streamlit`

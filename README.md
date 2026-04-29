@@ -65,6 +65,13 @@ flowchart LR
 |-- core/
 |   |-- utils.py
 |   `-- uc_feature_store.py
+|-- streamlit/
+|   |-- app.py
+|   |-- app.yaml
+|   |-- run_app.py
+|   |-- requirements.txt
+|   |-- core/
+|   `-- reports/
 `-- ops/
     |-- evaluator/
     |   |-- evaluator_validate.py
@@ -111,6 +118,14 @@ Shared library for notebooks:
 
 - `utils.py`: publishing conventions, naming, deploy helpers, smoke tests, reports, and model operations;
 - `uc_feature_store.py`: reusable bridge to Unity Catalog Feature Engineering.
+
+### `streamlit`
+
+Databricks app for the ML Reports Catalog:
+
+- main app and startup files (`app.py`, `app.yaml`, `run_app.py`);
+- app services under `core/`;
+- interactive reports under `streamlit/reports/`.
 
 ### `ops`
 
@@ -225,6 +240,13 @@ The project uses MLflow + Unity Catalog to:
 ### 4. Reports
 
 Reports are written into Unity Catalog volumes. The `write_report_with_single_backup()` utility keeps a backup copy of the previous file using the `.bkp` suffix.
+
+### 5. Reports catalog
+
+For a report to appear in the ML Reports Catalog (`streamlit/app.py`), define it using one of the following options:
+
+- save an `.html` file under the schema reports volume path (`/Volumes/<catalog>/<schema>/reports/...`);
+- create a Streamlit report module in `streamlit/reports/*.py` (except `__init__.py`) with a valid `render(context)` entrypoint.
 
 ## How the reference solution works
 

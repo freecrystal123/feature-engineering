@@ -201,36 +201,6 @@ def _split_rule_side(side_text: str) -> tuple[str, str]:
     return "ITEM", text
 
 
-def _render_rule_table(window_df: pd.DataFrame) -> None:
-    if window_df.empty:
-        st.info("No rules for selected filters.")
-        return
-
-    table = window_df.copy()
-    table["antecedent"] = table["antecedent_str"]
-    table["consequent"] = table["consequent_str"]
-    table["support"] = (table["support"] * 100).round(3).astype(str) + "%"
-    table["confidence"] = (table["confidence"] * 100).round(2).astype(str) + "%"
-    table["lift"] = table["lift"].round(2).astype(str) + "x"
-    table["users_in_both"] = table["rule_users"].astype("int64")
-    table["target_audience_users"] = table["target_audience_users"].astype("int64")
-    st.dataframe(
-        table[
-            [
-                "antecedent",
-                "consequent",
-                "support",
-                "confidence",
-                "lift",
-                "users_in_both",
-                "target_audience_users",
-            ]
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
 def _render_window_column(days: int, window_df: pd.DataFrame, mix_row: dict) -> None:
     st.markdown(f"#### Last {days} days")
     st.caption("Sorted by lift (desc), then confidence (desc).")
@@ -255,8 +225,6 @@ def _render_window_column(days: int, window_df: pd.DataFrame, mix_row: dict) -> 
     mix_col1.metric("Casino Players", _fmt_int(casino_users))
     mix_col2.metric("Hybrid Players", _fmt_int(hybrid_users))
     mix_col3.metric("Sports Players", _fmt_int(sports_users))
-
-    _render_rule_table(window_df)
 
     with st.expander("Top rules details", expanded=False):
         for _, row in window_df.head(25).iterrows():
