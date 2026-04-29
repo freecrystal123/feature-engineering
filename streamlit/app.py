@@ -58,7 +58,8 @@ def _inject_css() -> None:
           }
 
           .main .block-container {
-            max-width: 1260px;
+            max-width: none;
+            width: 100%;
             padding-top: 1.25rem;
             padding-bottom: 2rem;
             padding-left: 1rem;

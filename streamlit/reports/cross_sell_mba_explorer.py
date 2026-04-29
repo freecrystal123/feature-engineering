@@ -9,7 +9,7 @@ import streamlit as st
 from core.databricks_query_service import data_select, resolve_sql_http_path
 
 REPORT_META = {
-    "title": "Cross-sell MBA Explorer",
+    "title": "Cross-sell Analysis",
     "schema": "cross_sell_mba",
     "environments": ("training", "production"),
     "description": "Cross-platform MBA rules with 365d and 30d windows, lift/confidence ordering, and audience estimates.",
