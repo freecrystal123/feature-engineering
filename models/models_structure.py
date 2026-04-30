@@ -89,4 +89,27 @@ SUBJECT_SPECS: dict[str, SubjectSpec] = {
             use_current_as_entity_source=True,
         ),
     ),
+    "conversion_funnel_deposit": SubjectSpec(
+        schema="conversion_funnel_deposit",
+        report_folder="reports",
+        table_templates=(
+            "feat_{analysis}",
+            "pred_{analysis}",
+            "eval_{analysis}",
+            "shap_{analysis}",
+            "rpt_funnel_{analysis}",
+            "rpt_shap_{analysis}",
+            "rpt_eval_{analysis}",
+        ),
+        model_template="mdl_{analysis}",
+        report_templates=(),
+        feature_rebind=FeatureRebindSpec(
+            feature_table_template="feat_{analysis}",
+            entity_keys=("unique_user_id",),
+            entity_timestamp_col="run_ts",
+            label_col="label_deposit_success_30d",
+            flavor="sklearn",
+            use_current_as_entity_source=True,
+        ),
+    ),
 }

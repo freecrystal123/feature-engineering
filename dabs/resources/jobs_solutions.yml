@@ -91,3 +91,95 @@ resources:
           existing_cluster_id: ${var.analysis_cluster_id}
       queue:
         enabled: true
+
+    conversion_funnel_deposit_training:
+      name: conversion_funnel_deposit_training
+      tags:
+        solution: conversion_funnel_deposit
+        cadence: each_1m
+      schedule:
+        quartz_cron_expression: "0 45 2 1 * ?"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.training_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_training
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/02_model_training
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+              candidate_alias: challenger
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: model_training
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+              model_alias: challenger
+              model_catalog: ml_train
+              use_score_batch: "true"
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: report_dataset
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
+    conversion_funnel_deposit_prediction:
+      name: conversion_funnel_deposit_prediction
+      tags:
+        solution: conversion_funnel_deposit
+        cadence: each_1d
+      schedule:
+        quartz_cron_expression: "0 15 5 * * ?"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.prediction_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+              model_alias: champion
+              model_catalog: ml_train
+              use_score_batch: "true"
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: report_dataset
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
