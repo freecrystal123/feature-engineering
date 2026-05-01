@@ -103,7 +103,7 @@ def _load_shap(http_path: str, shap_table: str) -> pd.DataFrame:
       CAST(mean_shap AS DOUBLE) AS mean_shap,
       CAST(sample_size AS BIGINT) AS sample_size
     FROM {shap_table}
-    ORDER BY feature_rank ASC
+    ORDER BY mean_abs_shap DESC, feature_rank ASC
     """
     return data_select(query=query, http_path=http_path)
 
@@ -177,17 +177,19 @@ def render(context: dict | None = None) -> None:
     k3.metric("Success rate", _fmt_pct(latest.get("success_rate_30d")))
     k4.metric("Success | Attempt", _fmt_pct(latest.get("success_given_attempt_rate_30d")))
 
-    trend_df = funnel_df.sort_values("registration_month")[[
+    trend_df = funnel_df.sort_values("registration_month", ascending=True)[[
         "registration_month",
         "attempt_rate_30d",
         "success_rate_30d",
         "failed_given_attempt_rate_30d",
-    ]].set_index("registration_month")
+    ]].copy()
+    trend_df["registration_month"] = trend_df["registration_month"].dt.strftime("%Y-%m")
+    trend_df = trend_df.set_index("registration_month")
     st.markdown("##### Funnel trend by cohort month")
     st.line_chart(trend_df, use_container_width=True)
 
     st.markdown("##### Cohort table")
-    display_df = funnel_df.copy()
+    display_df = funnel_df.sort_values("registration_month", ascending=False).copy()
     display_df["registration_month"] = display_df["registration_month"].dt.date
     for col in [
         "attempt_rate_30d",
@@ -209,9 +211,23 @@ def render(context: dict | None = None) -> None:
         st.dataframe(eval_show, use_container_width=True, hide_index=True)
 
     if not shap_df.empty:
+        shap_df = shap_df.sort_values("mean_abs_shap", ascending=False).reset_index(drop=True)
+        total_abs_shap = float(shap_df["mean_abs_shap"].fillna(0.0).sum())
+        if total_abs_shap > 0:
+            shap_df["importance_pct"] = shap_df["mean_abs_shap"].fillna(0.0) / total_abs_shap
+            shap_df["cum_importance_pct"] = shap_df["importance_pct"].cumsum()
+        else:
+            shap_df["importance_pct"] = 0.0
+            shap_df["cum_importance_pct"] = 0.0
+
         st.markdown("##### SHAP top features")
-        top_n = st.slider("Top features", min_value=5, max_value=min(30, len(shap_df)), value=min(12, len(shap_df)))
+        max_top_n = min(30, len(shap_df))
+        default_top_n = min(12, max_top_n)
+        top_n = st.slider("Top features", min_value=1, max_value=max_top_n, value=default_top_n)
         top_shap = shap_df.head(top_n).copy()
         chart_df = top_shap[["feature_name", "mean_abs_shap"]].set_index("feature_name")
         st.bar_chart(chart_df, use_container_width=True)
-        st.dataframe(top_shap, use_container_width=True, hide_index=True)
+        display_shap = top_shap.copy()
+        display_shap["importance_pct"] = display_shap["importance_pct"].apply(_fmt_pct)
+        display_shap["cum_importance_pct"] = display_shap["cum_importance_pct"].apply(_fmt_pct)
+        st.dataframe(display_shap, use_container_width=True, hide_index=True)
