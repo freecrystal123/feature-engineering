@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -11,7 +12,8 @@ from core.databricks_query_service import data_select, resolve_sql_http_path
 REPORT_META = {
     "title": "Deposit Conversion Funnel",
     "schema": "conversion_funnel_deposit",
-    "environments": ("training", "production"),
+    # "environments": ("training", "production"),
+    "environments": ("training"),
     "description": "Monthly register-to-deposit funnel with model evaluation and SHAP explainability.",
 }
 
@@ -225,8 +227,20 @@ def render(context: dict | None = None) -> None:
         default_top_n = min(12, max_top_n)
         top_n = st.slider("Top features", min_value=1, max_value=max_top_n, value=default_top_n)
         top_shap = shap_df.head(top_n).copy()
-        chart_df = top_shap[["feature_name", "mean_abs_shap"]].set_index("feature_name")
-        st.bar_chart(chart_df, use_container_width=True)
+        chart_df = top_shap[["feature_name", "mean_abs_shap"]].sort_values("mean_abs_shap", ascending=False)
+        shap_chart = (
+            alt.Chart(chart_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("mean_abs_shap:Q", title="Mean |SHAP|"),
+                y=alt.Y(
+                    "feature_name:N",
+                    sort=alt.EncodingSortField(field="mean_abs_shap", op="sum", order="descending"),
+                    title="Feature",
+                ),
+            )
+        )
+        st.altair_chart(shap_chart, use_container_width=True)
         display_shap = top_shap.copy()
         display_shap["importance_pct"] = display_shap["importance_pct"].apply(_fmt_pct)
         display_shap["cum_importance_pct"] = display_shap["cum_importance_pct"].apply(_fmt_pct)

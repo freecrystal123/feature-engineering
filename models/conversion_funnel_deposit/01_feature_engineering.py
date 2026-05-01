@@ -11,6 +11,8 @@
 
 # COMMAND ----------
 
+import re
+
 from pyspark.sql import Window
 from pyspark.sql import functions as F
 
@@ -39,6 +41,17 @@ def _pick_col(df, candidates: list[str], label: str, required: bool = True) -> s
 
 def _present_flag(column_expr):
     return F.when(F.trim(F.coalesce(column_expr.cast("string"), F.lit(""))) != F.lit(""), F.lit(1)).otherwise(F.lit(0))
+
+
+def _sanitize_source_system_token(value: str) -> str:
+    token = re.sub(r"[^0-9a-zA-Z]+", "_", str(value).strip().lower())
+    token = re.sub(r"_+", "_", token).strip("_")
+    return token or "unknown"
+
+
+def _normalize_status_int(column_expr):
+    cleaned = F.regexp_extract(F.trim(F.coalesce(column_expr.cast("string"), F.lit(""))), r"([0-9]+)", 1)
+    return F.when(cleaned == F.lit(""), F.lit(None).cast("int")).otherwise(cleaned.cast("int"))
 
 
 # COMMAND ----------
@@ -124,7 +137,7 @@ registration_base = (
         _present_flag(F.col(f"u.{sign_phone_col}") if sign_phone_col else F.lit(None)).alias("has_sign_phone"),
         _present_flag(F.col(f"u.{mail_col}") if mail_col else F.lit(None)).alias("has_mail"),
         _present_flag(F.col(f"u.{phone_col}") if phone_col else F.lit(None)).alias("has_phone"),
-        F.pmod(F.abs(F.hash(F.col("v.source_system"))), F.lit(100000)).cast("int").alias("source_system_hash"),
+        F.pmod(F.abs(F.hash(F.col("v.source_system"))), F.lit(100000)).cast("int").alias("source_system_hash"),  # legacy diagnostic
         *[
             F.coalesce(F.col(f"u.{col_name}").cast("double"), F.lit(0.0)).alias(alias)
             if col_name else F.lit(0.0).alias(alias)
@@ -133,6 +146,42 @@ registration_base = (
     )
     .dropDuplicates(["user_id", "source_system"])
 )
+
+source_system_rows = (
+    registration_base
+    .groupBy("source_system")
+    .count()
+    .orderBy(F.col("count").desc(), F.col("source_system").asc())
+    .limit(int(SOURCE_SYSTEM_TOP_K))
+    .collect()
+)
+source_system_values = [r["source_system"] for r in source_system_rows if r["source_system"] is not None]
+
+source_system_ohe_cols: list[str] = []
+used_source_system_tokens: dict[str, int] = {}
+for source_value in source_system_values:
+    base_token = _sanitize_source_system_token(source_value)
+    used_source_system_tokens[base_token] = used_source_system_tokens.get(base_token, 0) + 1
+    suffix = used_source_system_tokens[base_token]
+    token = f"{base_token}_{suffix}" if suffix > 1 else base_token
+    col_name = f"source_system_is_{token}"
+    source_system_ohe_cols.append(col_name)
+    registration_base = registration_base.withColumn(
+        col_name,
+        F.when(F.col("source_system") == F.lit(source_value), F.lit(1)).otherwise(F.lit(0)),
+    )
+
+if source_system_ohe_cols:
+    ohe_sum_expr = None
+    for col_name in source_system_ohe_cols:
+        col_expr = F.col(col_name)
+        ohe_sum_expr = col_expr if ohe_sum_expr is None else (ohe_sum_expr + col_expr)
+    registration_base = registration_base.withColumn(
+        "source_system_is_other",
+        F.when(ohe_sum_expr > F.lit(0), F.lit(0)).otherwise(F.lit(1)),
+    )
+else:
+    registration_base = registration_base.withColumn("source_system_is_other", F.lit(1))
 
 # COMMAND ----------
 
@@ -279,8 +328,20 @@ verification_ts_col = _pick_col(
     "verification timestamp",
     required=False,
 )
+verify_type_col = _pick_col(verification, ["verify_type"], "verify_type", required=False)
+verified_status_col = _pick_col(verification, ["verified_status"], "verified_status", required=False)
 
 if verification_ts_col:
+    verified_status_raw_col = (
+        F.col(verified_status_col).cast("string") if verified_status_col else F.lit(None).cast("string")
+    )
+    verified_status_id_col = _normalize_status_int(verified_status_raw_col)
+    verify_type_id_col = (
+        _normalize_status_int(F.col(verify_type_col).cast("string"))
+        if verify_type_col
+        else F.lit(None).cast("int")
+    )
+
     verification_base = (
         verification
         .select(
@@ -288,9 +349,22 @@ if verification_ts_col:
             F.col("source_system").alias("source_system"),
             F.to_timestamp(F.col(verification_ts_col)).alias("verification_ts"),
             F.col("verified").cast("int").alias("verified") if "verified" in verification.columns else F.lit(None).cast("int").alias("verified"),
-            F.col("verified_status").cast("int").alias("verified_status") if "verified_status" in verification.columns else F.lit(None).cast("int").alias("verified_status"),
+            verify_type_id_col.alias("verify_type_id"),
+            verified_status_raw_col.alias("verified_status_raw"),
+            verified_status_id_col.alias("verified_status_id"),
         )
         .filter(F.col("verification_ts").isNotNull())
+    )
+
+    kyc_event_condition = (
+        F.col("v.verify_type_id").isin(2, 3)
+        if verify_type_col
+        else F.col("v.verification_ts").isNotNull()
+    )
+    ekyc_event_condition = (
+        F.col("v.verify_type_id") == 3
+        if verify_type_col
+        else F.lit(False)
     )
 
     verification_features = (
@@ -305,7 +379,17 @@ if verification_ts_col:
         )
         .withColumn(
             "verified_success_flag",
-            F.when((F.col("v.verified") == 1) | (F.col("v.verified_status") == 1), F.lit(1)).otherwise(F.lit(0)),
+            F.when((F.col("v.verified") == 1) | (F.col("v.verified_status_id") == 3), F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn("kyc_event_flag", F.when(kyc_event_condition, F.lit(1)).otherwise(F.lit(0)))
+        .withColumn("ekyc_event_flag", F.when(ekyc_event_condition, F.lit(1)).otherwise(F.lit(0)))
+        .withColumn(
+            "kyc_success_flag",
+            F.when(kyc_event_condition & (F.col("v.verified_status_id") == 3), F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "ekyc_success_flag",
+            F.when(ekyc_event_condition & (F.col("v.verified_status_id") == 3), F.lit(1)).otherwise(F.lit(0)),
         )
         .groupBy("r.user_id", "r.source_system")
         .agg(
@@ -317,11 +401,58 @@ if verification_ts_col:
                     (F.col("v.verification_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
                 )
             ).cast("double").alias("first_verification_delay_hours_7d"),
+            F.sum(F.col("kyc_event_flag")).cast("double").alias("num_kyc_events_7d"),
+            F.max(F.col("kyc_event_flag")).cast("int").alias("has_kyc_attempt_7d"),
+            F.max(F.col("kyc_success_flag")).cast("int").alias("kyc_verified_success_7d"),
+            F.min(
+                F.when(
+                    F.col("kyc_event_flag") == 1,
+                    (F.col("v.verification_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
+                )
+            ).cast("double").alias("first_kyc_attempt_delay_hours_7d"),
+            F.min(
+                F.when(
+                    F.col("kyc_success_flag") == 1,
+                    (F.col("v.verification_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
+                )
+            ).cast("double").alias("first_kyc_success_delay_hours_7d"),
+            F.sum(F.col("ekyc_event_flag")).cast("double").alias("num_ekyc_events_7d"),
+            F.max(F.col("ekyc_event_flag")).cast("int").alias("has_ekyc_attempt_7d"),
+            F.max(F.col("ekyc_success_flag")).cast("int").alias("ekyc_verified_success_7d"),
+            F.min(
+                F.when(
+                    F.col("ekyc_event_flag") == 1,
+                    (F.col("v.verification_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
+                )
+            ).cast("double").alias("first_ekyc_attempt_delay_hours_7d"),
+            F.min(
+                F.when(
+                    F.col("ekyc_success_flag") == 1,
+                    (F.col("v.verification_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
+                )
+            ).cast("double").alias("first_ekyc_success_delay_hours_7d"),
         )
         .withColumn("has_verification_event_7d", F.when(F.col("num_verification_events_7d") > 0, F.lit(1)).otherwise(F.lit(0)))
     )
 else:
-    verification_features = registration_base.select("user_id", "source_system").withColumn("num_verification_events_7d", F.lit(0.0)).withColumn("verified_in_7d", F.lit(0)).withColumn("first_verification_delay_hours_7d", F.lit(None).cast("double")).withColumn("has_verification_event_7d", F.lit(0))
+    verification_features = (
+        registration_base
+        .select("user_id", "source_system")
+        .withColumn("num_verification_events_7d", F.lit(0.0))
+        .withColumn("verified_in_7d", F.lit(0))
+        .withColumn("first_verification_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("has_verification_event_7d", F.lit(0))
+        .withColumn("num_kyc_events_7d", F.lit(0.0))
+        .withColumn("has_kyc_attempt_7d", F.lit(0))
+        .withColumn("kyc_verified_success_7d", F.lit(0))
+        .withColumn("first_kyc_attempt_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("first_kyc_success_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("num_ekyc_events_7d", F.lit(0.0))
+        .withColumn("has_ekyc_attempt_7d", F.lit(0))
+        .withColumn("ekyc_verified_success_7d", F.lit(0))
+        .withColumn("first_ekyc_attempt_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("first_ekyc_success_delay_hours_7d", F.lit(None).cast("double"))
+    )
 
 # COMMAND ----------
 
@@ -461,6 +592,12 @@ features = (
             "num_verification_events_7d": 0.0,
             "verified_in_7d": 0,
             "has_verification_event_7d": 0,
+            "num_kyc_events_7d": 0.0,
+            "has_kyc_attempt_7d": 0,
+            "kyc_verified_success_7d": 0,
+            "num_ekyc_events_7d": 0.0,
+            "has_ekyc_attempt_7d": 0,
+            "ekyc_verified_success_7d": 0,
             "num_deposit_attempts_30d": 0.0,
             "num_deposit_success_30d": 0.0,
             "num_deposit_failure_30d": 0.0,
@@ -476,6 +613,7 @@ features = (
 # COMMAND ----------
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
+spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
 
 for analysis in get_analyses_to_run():
     analysis_name = ANALYSIS_NAMES[analysis]

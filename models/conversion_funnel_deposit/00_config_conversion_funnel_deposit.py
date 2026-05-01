@@ -39,11 +39,49 @@ COHORT_LOOKBACK_MONTHS = 12
 LABEL_WINDOW_DAYS = 30
 EARLY_ACTIVITY_HOURS = 24
 VERIFICATION_WINDOW_DAYS = 7
+SOURCE_SYSTEM_TOP_K = 10
 
 # Model defaults
 DEFAULT_CANDIDATE_ALIAS = "challenger"
 DEFAULT_CHAMPION_ALIAS = "champion"
 DEFAULT_RANDOM_SEED = 42
+
+
+# Features kept in the feature table for diagnostics, but excluded from model fitting.
+EXCLUDED_MODEL_FEATURES = {
+    # Superseded by source_system one-hot features.
+    "source_system_hash",
+    # Constant / near-constant / no-signal columns found in feature distribution review.
+    "username_length",
+    "sale_status_id",
+    "user_type_id",
+    "profile_platform_id",
+    "profile_os_type_id",
+    "resident_country_id",
+    "distributor_status_id",
+    "enable_status_id",
+    "has_sign_login_name",
+    "verified_in_7d",
+    "has_verification_event_7d",
+    "has_marketing_channel",
+    "has_marketing_source",
+    "has_referrer",
+    "has_referrer_code",
+    "has_device_code",
+    "has_user_agent",
+    "has_imei",
+    "has_idfa",
+    "has_android_id",
+    "has_cookie_data",
+    "num_test_groups",
+    "has_any_group",
+    # Redundant with kept counterparts.
+    "has_mail",
+    "has_phone",
+    "num_non_test_groups",
+    "num_active_login_methods",
+    "num_third_party_login_methods",
+}
 
 
 def get_funnel_feature_columns(table_df):
@@ -57,17 +95,29 @@ def get_funnel_feature_columns(table_df):
         "num_deposit_success_30d",
         "num_deposit_failure_30d",
         "num_deposit_pending_30d",
+        "num_deposit_channels_30d",
+        "num_deposit_modes_30d",
         "sum_deposit_amount_attempted_30d",
         "avg_deposit_amount_attempted_30d",
         "first_attempt_delay_hours_30d",
         "first_success_delay_hours_30d",
         "observation_complete",
     }
-    excluded = metadata_cols | key_cols | leak_cols
+    leak_prefixes = (
+        "label_",
+        "num_deposit_",
+        "sum_deposit_",
+        "avg_deposit_",
+        "first_attempt_delay_",
+        "first_success_delay_",
+    )
+    excluded = metadata_cols | key_cols | leak_cols | EXCLUDED_MODEL_FEATURES
 
     cols = []
     for f in table_df.schema.fields:
         if f.name in excluded:
+            continue
+        if any(f.name.startswith(prefix) for prefix in leak_prefixes):
             continue
         if f.dataType.typeName() in {"byte", "short", "integer", "long", "float", "double", "decimal", "boolean"}:
             cols.append(f.name)

@@ -228,6 +228,7 @@ def publish_table(
     current_mode: str = "view",
     primary_keys: str | list[str] | tuple[str, ...] | None = None,
     timeseries_column: str | None = None,
+    append_merge_schema: bool = False,
 ) -> dict[str, Any]:
     """
     Publish a dataframe using snapshot/current convention.
@@ -257,7 +258,10 @@ def publish_table(
     if analysis_name is not None:
         out_df = _with_col_if_missing(out_df, "analysis_name", F.lit(analysis_name))
 
-    out_df.write.format("delta").mode("append").saveAsTable(snapshot_name)
+    append_writer = out_df.write.format("delta").mode("append")
+    if append_merge_schema:
+        append_writer = append_writer.option("mergeSchema", "true")
+    append_writer.saveAsTable(snapshot_name)
     snapshot_constraints = _ensure_uc_primary_key_constraints(
         spark=spark,
         table_name=snapshot_name,
@@ -291,6 +295,7 @@ def publish_table(
         "current_mode": current_mode,
         "primary_keys": _normalize_cols(primary_keys),
         "timeseries_column": timeseries_column,
+        "append_merge_schema": bool(append_merge_schema),
         "snapshot_constraints": snapshot_constraints,
     }
 
