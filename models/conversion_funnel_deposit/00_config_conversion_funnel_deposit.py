@@ -16,6 +16,18 @@ MODEL_SPACE_PREFIX = get_model_space_prefix(SUBJECT_NAME)
 
 ANALYSIS_NAMES = {
     "analysis_1": "register_to_deposit_30d",
+    "analysis_2": "register_to_deposit_30d_truewin",
+    "analysis_3": "register_to_deposit_30d_igaming",
+}
+
+# Per-analysis source_system filters applied in feature engineering publish step.
+# Rules:
+# - include: when provided, keep only these systems
+# - exclude: remove these systems
+ANALYSIS_SOURCE_SYSTEM_FILTERS = {
+    "analysis_1": {"include": None, "exclude": []},
+    "analysis_2": {"include": ["TRUEWIN"], "exclude": []},
+    "analysis_3": {"include": None, "exclude": ["LOTTERY"]},
 }
 
 # Feature + output tables
@@ -27,24 +39,55 @@ T_FUNNEL_REPORT_PREFIX = f"{WRITE_SCHEMA}.rpt"
 
 # Additional SILVER sources for this analysis
 SILVER_USER = f"{READ_SILVER_DB}.user.user"
+SILVER_USER_REGISTRATION = f"{READ_SILVER_DB}.user.user_registration"
 SILVER_USER_PROFILE = f"{READ_SILVER_DB}.user.user_profile"
 SILVER_USER_GROUP = f"{READ_SILVER_DB}.user.user_group"
 SILVER_USER_LOGIN = f"{READ_SILVER_DB}.user.user_login"
 SILVER_USER_LOGIN_LOG = f"{READ_SILVER_DB}.user.user_login_log"
 SILVER_USER_VERIFICATION = f"{READ_SILVER_DB}.user.user_verification"
+SILVER_USER_REMARK = f"{READ_SILVER_DB}.user.user_remark"
 SILVER_WALLET_DEPOSIT = f"{READ_SILVER_DB}.wallet.deposit"
+SILVER_WALLET_WALLET = f"{READ_SILVER_DB}.wallet.wallet"
 
 # Cohort + modeling windows
 COHORT_LOOKBACK_MONTHS = 12
 LABEL_WINDOW_DAYS = 30
 EARLY_ACTIVITY_HOURS = 24
 VERIFICATION_WINDOW_DAYS = 7
+REMARK_WINDOW_DAYS = 7
+WALLET_WINDOW_DAYS = 7
 SOURCE_SYSTEM_TOP_K = 10
+VERIFICATION_COUNTRY_TOP_K = 10
 
 # Model defaults
 DEFAULT_CANDIDATE_ALIAS = "challenger"
 DEFAULT_CHAMPION_ALIAS = "champion"
 DEFAULT_RANDOM_SEED = 42
+
+# Demographic deep-dive defaults (used by notebook/report generation)
+DEMOGRAPHIC_TOP_FEATURES_DEFAULT = 12
+DEMOGRAPHIC_MAX_SEGMENTS = 12
+DEMOGRAPHIC_NUMERIC_BINS = 5
+DEMOGRAPHIC_CLASSIC_FEATURES = [
+    "registration_hour",
+    "registration_weekday",
+    "registration_day_of_month",
+    "registration_weekend_flag",
+    "registered_by_mobile",
+    "registered_by_desktop",
+    "days_since_registration",
+]
+
+# Keep calendar and device flags as exact values in demographic segmentation
+# (no numeric quantile bins), so report visuals stay hour/day level.
+DEMOGRAPHIC_FORCE_DISCRETE_FEATURES = {
+    "registration_hour",
+    "registration_weekday",
+    "registration_day_of_month",
+    "registration_weekend_flag",
+    "registered_by_mobile",
+    "registered_by_desktop",
+}
 
 
 # Features kept in the feature table for diagnostics, but excluded from model fitting.

@@ -17,16 +17,14 @@ REPORT_META = {
     "description": "Monthly register-to-deposit funnel with model evaluation and SHAP explainability.",
 }
 
-ANALYSIS_NAMES = {"analysis_1": "register_to_deposit_30d"}
 FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_1")
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.]+$")
 
-FUNNEL_TABLE_TRAINING = "ml_train.conversion_funnel_deposit.rpt_funnel_register_to_deposit_30d_current"
-FUNNEL_TABLE_PRODUCTION = "ml_prod.conversion_funnel_deposit.rpt_funnel_register_to_deposit_30d_current"
-SHAP_TABLE_TRAINING = "ml_train.conversion_funnel_deposit.rpt_shap_register_to_deposit_30d_current"
-SHAP_TABLE_PRODUCTION = "ml_prod.conversion_funnel_deposit.rpt_shap_register_to_deposit_30d_current"
-EVAL_TABLE_TRAINING = "ml_train.conversion_funnel_deposit.rpt_eval_register_to_deposit_30d_current"
-EVAL_TABLE_PRODUCTION = "ml_prod.conversion_funnel_deposit.rpt_eval_register_to_deposit_30d_current"
+ANALYSIS_NAMES = {
+    "analysis_1": "register_to_deposit_30d",
+    "analysis_2": "register_to_deposit_30d_truewin",
+    "analysis_3": "register_to_deposit_30d_igaming",
+}
 
 
 def _environment_key(environment: str) -> str:
@@ -45,6 +43,16 @@ def _analysis_name() -> str:
     return ANALYSIS_NAMES.get(FUNNEL_ANALYSIS, "register_to_deposit_30d")
 
 
+def _analysis_options() -> list[str]:
+    options: list[str] = []
+    seen: set[str] = set()
+    for _, name in sorted(ANALYSIS_NAMES.items()):
+        if name not in seen:
+            options.append(name)
+            seen.add(name)
+    return options
+
+
 def _safe_table_name(name: str) -> str:
     table_name = str(name).strip()
     if not TABLE_NAME_PATTERN.match(table_name):
@@ -52,14 +60,14 @@ def _safe_table_name(name: str) -> str:
     return table_name
 
 
-def _resolve_table_names(context: dict) -> tuple[str, str, str, str]:
+def _resolve_table_names(context: dict, analysis_name: str) -> tuple[str, str, str]:
     environment = str(context.get("environment", "production")).strip().lower()
     env_key = _environment_key(environment)
-    analysis_name = _analysis_name()
 
-    default_funnel = FUNNEL_TABLE_TRAINING if env_key == "TRAINING" else FUNNEL_TABLE_PRODUCTION
-    default_shap = SHAP_TABLE_TRAINING if env_key == "TRAINING" else SHAP_TABLE_PRODUCTION
-    default_eval = EVAL_TABLE_TRAINING if env_key == "TRAINING" else EVAL_TABLE_PRODUCTION
+    default_catalog = "ml_train" if env_key == "TRAINING" else "ml_prod"
+    default_funnel = f"{default_catalog}.conversion_funnel_deposit.rpt_funnel_{analysis_name}_current"
+    default_shap = f"{default_catalog}.conversion_funnel_deposit.rpt_shap_{analysis_name}_current"
+    default_eval = f"{default_catalog}.conversion_funnel_deposit.rpt_eval_{analysis_name}_current"
 
     funnel_override = str(os.getenv(f"FUNNEL_TABLE_{env_key}", "")).strip() or str(os.getenv("FUNNEL_TABLE", "")).strip()
     shap_override = str(os.getenv(f"FUNNEL_SHAP_TABLE_{env_key}", "")).strip() or str(os.getenv("FUNNEL_SHAP_TABLE", "")).strip()
@@ -69,7 +77,7 @@ def _resolve_table_names(context: dict) -> tuple[str, str, str, str]:
     shap_table = _safe_table_name(shap_override) if shap_override else _safe_table_name(default_shap)
     eval_table = _safe_table_name(eval_override) if eval_override else _safe_table_name(default_eval)
 
-    return funnel_table, shap_table, eval_table, analysis_name
+    return funnel_table, shap_table, eval_table
 
 
 @st.cache_data(ttl=180)
@@ -153,8 +161,21 @@ def render(context: dict | None = None) -> None:
         )
         return
 
+    default_analysis = _analysis_name()
+    analysis_options = _analysis_options()
+    if default_analysis not in analysis_options:
+        analysis_options = [default_analysis] + analysis_options
+    default_idx = analysis_options.index(default_analysis)
+
+    analysis_name = st.selectbox(
+        "Analysis",
+        options=analysis_options,
+        index=default_idx,
+        help="Select which conversion funnel analysis to display.",
+    )
+
     try:
-        funnel_table, shap_table, eval_table, analysis_name = _resolve_table_names(context)
+        funnel_table, shap_table, eval_table = _resolve_table_names(context, analysis_name)
         funnel_df = _load_funnel(http_path, funnel_table)
         shap_df = _load_shap(http_path, shap_table)
         eval_df = _load_eval(http_path, eval_table)

@@ -54,16 +54,79 @@ def _normalize_status_int(column_expr):
     return F.when(cleaned == F.lit(""), F.lit(None).cast("int")).otherwise(cleaned.cast("int"))
 
 
+def _quote_identifier(column_name: str) -> str:
+    raw = str(column_name).strip()
+    parts = [p.strip() for p in raw.split(".") if p.strip()]
+
+    if not parts:
+        return "``"
+
+    quoted_parts = []
+    for part in parts:
+        clean = part
+        if clean.startswith("`") and clean.endswith("`") and len(clean) >= 2:
+            clean = clean[1:-1]
+        quoted_parts.append(f"`{clean.replace('`', '``')}`")
+
+    return ".".join(quoted_parts)
+
+
+def _safe_to_timestamp(column_name: str):
+    q = _quote_identifier(column_name)
+    return F.coalesce(
+        F.expr(f"try_to_timestamp({q})"),
+        F.expr(f"try_to_timestamp({q}, 'yyyy-MM-dd HH:mm:ss')"),
+        F.expr(f"try_to_timestamp({q}, 'yyyy-MM-dd HH:mm:ss.SSS')"),
+        F.expr(f"try_to_timestamp({q}, 'yyyy/MM/dd HH:mm:ss')"),
+        F.expr(f"try_to_timestamp({q}, 'dd/MM/yyyy HH:mm:ss')"),
+        F.expr(f"try_to_timestamp({q}, 'yyyy-MM-dd')"),
+        F.expr(f"try_to_timestamp({q}, 'yyyy/MM/dd')"),
+        F.expr(f"try_to_timestamp({q}, 'dd/MM/yyyy')"),
+    )
+
+
+def _safe_to_date(column_name: str):
+    q = _quote_identifier(column_name)
+    return F.coalesce(
+        F.expr(f"try_to_date({q})"),
+        F.expr(f"try_to_date({q}, 'yyyy-MM-dd')"),
+        F.expr(f"try_to_date({q}, 'yyyy/MM/dd')"),
+        F.expr(f"try_to_date({q}, 'dd/MM/yyyy')"),
+    )
+
+
+def _apply_analysis_source_filter(df, analysis_id_value: str):
+    rules = ANALYSIS_SOURCE_SYSTEM_FILTERS.get(analysis_id_value, {"include": None, "exclude": []})
+    include = rules.get("include")
+    exclude = rules.get("exclude", [])
+
+    out = df
+    if include:
+        include_norm = [str(v).strip().upper() for v in include if str(v).strip()]
+        if include_norm:
+            out = out.filter(F.upper(F.col("source_system")).isin(include_norm))
+
+    if exclude:
+        exclude_norm = [str(v).strip().upper() for v in exclude if str(v).strip()]
+        if exclude_norm:
+            out = out.filter(~F.upper(F.col("source_system")).isin(exclude_norm))
+
+    return out
+
+
 # COMMAND ----------
 
 users_dim = spark.table(DIM_USER)
 users = spark.table(SILVER_USER)
+registrations = spark.table(SILVER_USER_REGISTRATION)
 profiles = spark.table(SILVER_USER_PROFILE)
 groups = spark.table(SILVER_USER_GROUP)
 login_methods = spark.table(SILVER_USER_LOGIN)
 login_logs = spark.table(SILVER_USER_LOGIN_LOG)
 verification = spark.table(SILVER_USER_VERIFICATION)
+remarks = spark.table(SILVER_USER_REMARK)
 deposit = spark.table(SILVER_WALLET_DEPOSIT)
+wallets = spark.table(SILVER_WALLET_WALLET)
 
 # COMMAND ----------
 
@@ -119,7 +182,7 @@ registration_base = (
         & (F.col(f"u.{user_source_col}") == F.col("v.source_system")),
         "inner",
     )
-    .withColumn("registration_ts", F.to_timestamp(F.col(f"u.{user_ts_col}")))
+    .withColumn("registration_ts", _safe_to_timestamp(f"u.{user_ts_col}"))
     .filter(F.col("registration_ts").isNotNull())
     .filter(F.col("registration_ts") >= cohort_start)
     .filter(F.col("registration_ts") < F.current_timestamp())
@@ -145,6 +208,54 @@ registration_base = (
         ],
     )
     .dropDuplicates(["user_id", "source_system"])
+)
+
+# Device class at registration from user_registration.plat_form
+reg_user_id_col = _pick_col(registrations, ["user_id"], "registration.user_id", required=False)
+reg_source_col = _pick_col(registrations, ["source_system"], "registration.source_system", required=False)
+reg_platform_col = _pick_col(registrations, ["plat_form"], "registration.plat_form", required=False)
+reg_ts_col = _pick_col(
+    registrations,
+    ["register_time_uae", "register_time", "created_time_uae", "created_time", "updated_time_uae", "updated_time"],
+    "registration event timestamp",
+    required=False,
+)
+
+if reg_user_id_col and reg_source_col:
+    reg_partition = Window.partitionBy(reg_user_id_col, reg_source_col).orderBy(
+        _safe_to_timestamp(reg_ts_col).asc_nulls_last() if reg_ts_col else F.lit(1)
+    )
+    registration_platform_features = (
+        registrations
+        .withColumn("_rn", F.row_number().over(reg_partition))
+        .filter(F.col("_rn") == 1)
+        .select(
+            F.col(reg_user_id_col).cast("long").alias("user_id"),
+            F.col(reg_source_col).alias("source_system"),
+            F.col(reg_platform_col).cast("double").alias("registration_platform_id") if reg_platform_col else F.lit(None).cast("double").alias("registration_platform_id"),
+        )
+        .withColumn(
+            "registered_by_mobile",
+            F.when(F.col("registration_platform_id").isin(1, 2, 4), F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "registered_by_desktop",
+            F.when(F.col("registration_platform_id").isin(0, 3), F.lit(1)).otherwise(F.lit(0)),
+        )
+    )
+else:
+    registration_platform_features = (
+        registration_base
+        .select("user_id", "source_system")
+        .withColumn("registration_platform_id", F.lit(None).cast("double"))
+        .withColumn("registered_by_mobile", F.lit(0))
+        .withColumn("registered_by_desktop", F.lit(0))
+    )
+
+registration_base = (
+    registration_base.alias("r")
+    .join(registration_platform_features.alias("rp"), on=["user_id", "source_system"], how="left")
+    .select("r.*", "rp.registration_platform_id", "rp.registered_by_mobile", "rp.registered_by_desktop")
 )
 
 source_system_rows = (
@@ -196,7 +307,7 @@ profile_ts_col = _pick_col(
 )
 
 profile_partition = Window.partitionBy(profile_user_id_col, profile_source_col).orderBy(
-    F.to_timestamp(F.col(profile_ts_col)).desc_nulls_last() if profile_ts_col else F.lit(1)
+    _safe_to_timestamp(profile_ts_col).desc_nulls_last() if profile_ts_col else F.lit(1)
 )
 
 profile_latest = (
@@ -244,13 +355,22 @@ if "type" in groups.columns:
         .groupBy("user_id", "source_system")
         .agg(
             F.countDistinct("group_row_id").cast("double").alias("num_user_groups"),
+            F.countDistinct("group_type").cast("double").alias("num_distinct_group_types"),
             F.sum(F.when(F.col("group_type").isin(50, 121), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_test_groups"),
         )
         .withColumn("has_any_group", F.when(F.col("num_user_groups") > 0, F.lit(1)).otherwise(F.lit(0)))
         .withColumn("num_non_test_groups", F.greatest(F.col("num_user_groups") - F.col("num_test_groups"), F.lit(0.0)))
     )
 else:
-    group_features = registration_base.select("user_id", "source_system").withColumn("num_user_groups", F.lit(0.0)).withColumn("num_test_groups", F.lit(0.0)).withColumn("has_any_group", F.lit(0)).withColumn("num_non_test_groups", F.lit(0.0))
+    group_features = (
+        registration_base
+        .select("user_id", "source_system")
+        .withColumn("num_user_groups", F.lit(0.0))
+        .withColumn("num_distinct_group_types", F.lit(0.0))
+        .withColumn("num_test_groups", F.lit(0.0))
+        .withColumn("has_any_group", F.lit(0))
+        .withColumn("num_non_test_groups", F.lit(0.0))
+    )
 
 # COMMAND ----------
 
@@ -290,7 +410,7 @@ if login_log_ts_col:
         .select(
             F.col("user_id").cast("long").alias("user_id"),
             F.col("source_system").alias("source_system"),
-            F.to_timestamp(F.col(login_log_ts_col)).alias("login_event_ts"),
+            _safe_to_timestamp(login_log_ts_col).alias("login_event_ts"),
             F.col("login_status").cast("int").alias("login_status") if "login_status" in login_logs.columns else F.lit(None).cast("int").alias("login_status"),
             F.col("ip").cast("string").alias("ip") if "ip" in login_logs.columns else F.lit(None).cast("string").alias("ip"),
             F.col("channel").cast("string").alias("channel") if "channel" in login_logs.columns else F.lit(None).cast("string").alias("channel"),
@@ -330,6 +450,19 @@ verification_ts_col = _pick_col(
 )
 verify_type_col = _pick_col(verification, ["verify_type"], "verify_type", required=False)
 verified_status_col = _pick_col(verification, ["verified_status"], "verified_status", required=False)
+fail_reason_col = _pick_col(verification, ["fail_reason"], "fail_reason", required=False)
+country_region_col = _pick_col(verification, ["country_region"], "country_region", required=False)
+gender_col = _pick_col(verification, ["gender"], "gender", required=False)
+verification_ip_col = _pick_col(verification, ["ip"], "verification.ip", required=False)
+id_card_type_col = _pick_col(verification, ["id_card_type"], "id_card_type", required=False)
+name_similar_col = _pick_col(verification, ["name_similar"], "name_similar", required=False)
+birth_date_v_col = _pick_col(verification, ["birth_date"], "verification.birth_date", required=False)
+id_card_img_col = _pick_col(verification, ["id_card_img"], "id_card_img", required=False)
+sign_phone_v_col = _pick_col(verification, ["sign_phone"], "sign_phone", required=False)
+sign_id_card_v_col = _pick_col(verification, ["sign_id_card"], "sign_id_card", required=False)
+
+verification_country_ohe_cols: list[str] = []
+verification_country_agg_exprs: list = []
 
 if verification_ts_col:
     verified_status_raw_col = (
@@ -341,20 +474,74 @@ if verification_ts_col:
         if verify_type_col
         else F.lit(None).cast("int")
     )
+    fail_reason_id_col = (
+        _normalize_status_int(F.col(fail_reason_col).cast("string"))
+        if fail_reason_col
+        else F.lit(None).cast("int")
+    )
+    country_region_norm_col = (
+        F.upper(F.trim(F.col(country_region_col).cast("string")))
+        if country_region_col
+        else F.lit(None).cast("string")
+    )
+    gender_norm_col = (
+        F.lower(F.trim(F.col(gender_col).cast("string")))
+        if gender_col
+        else F.lit(None).cast("string")
+    )
 
     verification_base = (
         verification
         .select(
             F.col("user_id").cast("long").alias("user_id"),
             F.col("source_system").alias("source_system"),
-            F.to_timestamp(F.col(verification_ts_col)).alias("verification_ts"),
+            _safe_to_timestamp(verification_ts_col).alias("verification_ts"),
             F.col("verified").cast("int").alias("verified") if "verified" in verification.columns else F.lit(None).cast("int").alias("verified"),
             verify_type_id_col.alias("verify_type_id"),
             verified_status_raw_col.alias("verified_status_raw"),
             verified_status_id_col.alias("verified_status_id"),
+            fail_reason_id_col.alias("fail_reason_id"),
+            country_region_norm_col.alias("country_region"),
+            gender_norm_col.alias("gender_norm"),
+            F.col(verification_ip_col).cast("string").alias("verification_ip") if verification_ip_col else F.lit(None).cast("string").alias("verification_ip"),
+            F.col(id_card_type_col).cast("int").alias("id_card_type") if id_card_type_col else F.lit(None).cast("int").alias("id_card_type"),
+            F.col(name_similar_col).cast("double").alias("name_similar") if name_similar_col else F.lit(None).cast("double").alias("name_similar"),
+            _safe_to_date(birth_date_v_col).alias("birth_date_verification") if birth_date_v_col else F.lit(None).cast("date").alias("birth_date_verification"),
+            _present_flag(F.col(id_card_img_col) if id_card_img_col else F.lit(None)).alias("has_id_card_img"),
+            _present_flag(F.col(sign_phone_v_col) if sign_phone_v_col else F.lit(None)).alias("has_sign_phone_verification"),
+            _present_flag(F.col(sign_id_card_v_col) if sign_id_card_v_col else F.lit(None)).alias("has_sign_id_card_verification"),
         )
         .filter(F.col("verification_ts").isNotNull())
     )
+
+    country_rows = (
+        verification_base
+        .filter(
+            (F.col("verify_type_id") == 3)
+            & (F.col("verified_status_id") == 3)
+            & F.col("country_region").isNotNull()
+            & (F.col("country_region") != "")
+        )
+        .groupBy("country_region")
+        .count()
+        .orderBy(F.col("count").desc(), F.col("country_region").asc())
+        .limit(int(VERIFICATION_COUNTRY_TOP_K))
+        .collect()
+    )
+    country_values = [r["country_region"] for r in country_rows if r["country_region"]]
+    used_country_tokens: dict[str, int] = {}
+    for country_value in country_values:
+        base_token = _sanitize_source_system_token(country_value)
+        used_country_tokens[base_token] = used_country_tokens.get(base_token, 0) + 1
+        suffix = used_country_tokens[base_token]
+        token = f"{base_token}_{suffix}" if suffix > 1 else base_token
+        col_name = f"verification_country_region_is_{token}_7d"
+        verification_country_ohe_cols.append(col_name)
+        verification_country_agg_exprs.append(
+            F.max(
+                F.when(F.col("v.country_region") == F.lit(country_value), F.lit(1)).otherwise(F.lit(0))
+            ).cast("int").alias(col_name)
+        )
 
     kyc_event_condition = (
         F.col("v.verify_type_id").isin(2, 3)
@@ -366,6 +553,12 @@ if verification_ts_col:
         if verify_type_col
         else F.lit(False)
     )
+    verification_success_condition = (F.col("v.verified") == 1) | (F.col("v.verified_status_id") == 3)
+    verification_fail_condition = F.col("v.verification_ts").isNotNull() & (~verification_success_condition)
+    ekyc_fail_condition = ekyc_event_condition & (~verification_success_condition)
+    risk_fail_reason_condition = F.col("v.fail_reason_id").isNotNull()
+    gender_male_condition = F.col("v.gender_norm").rlike("^(m|male|masculino|1)$")
+    gender_female_condition = F.col("v.gender_norm").rlike("^(f|female|feminino|2)$")
 
     verification_features = (
         registration_base.alias("r")
@@ -379,7 +572,11 @@ if verification_ts_col:
         )
         .withColumn(
             "verified_success_flag",
-            F.when((F.col("v.verified") == 1) | (F.col("v.verified_status_id") == 3), F.lit(1)).otherwise(F.lit(0)),
+            F.when(verification_success_condition, F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "verification_fail_flag",
+            F.when(verification_fail_condition, F.lit(1)).otherwise(F.lit(0)),
         )
         .withColumn("kyc_event_flag", F.when(kyc_event_condition, F.lit(1)).otherwise(F.lit(0)))
         .withColumn("ekyc_event_flag", F.when(ekyc_event_condition, F.lit(1)).otherwise(F.lit(0)))
@@ -391,9 +588,30 @@ if verification_ts_col:
             "ekyc_success_flag",
             F.when(ekyc_event_condition & (F.col("v.verified_status_id") == 3), F.lit(1)).otherwise(F.lit(0)),
         )
+        .withColumn(
+            "ekyc_fail_flag",
+            F.when(ekyc_fail_condition, F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "gender_male_flag",
+            F.when(gender_male_condition, F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "gender_female_flag",
+            F.when(gender_female_condition, F.lit(1)).otherwise(F.lit(0)),
+        )
+        .withColumn(
+            "verification_age_years",
+            F.when(
+                F.col("v.birth_date_verification").isNotNull(),
+                F.months_between(F.to_date(F.col("r.registration_ts")), F.col("v.birth_date_verification")) / F.lit(12.0),
+            ).otherwise(F.lit(None).cast("double")),
+        )
         .groupBy("r.user_id", "r.source_system")
         .agg(
             F.count(F.col("v.verification_ts")).cast("double").alias("num_verification_events_7d"),
+            F.sum(F.col("verified_success_flag")).cast("double").alias("num_verification_success_events_7d"),
+            F.sum(F.col("verification_fail_flag")).cast("double").alias("num_verification_fail_events_7d"),
             F.max(F.col("verified_success_flag")).cast("int").alias("verified_in_7d"),
             F.min(
                 F.when(
@@ -419,6 +637,9 @@ if verification_ts_col:
             F.sum(F.col("ekyc_event_flag")).cast("double").alias("num_ekyc_events_7d"),
             F.max(F.col("ekyc_event_flag")).cast("int").alias("has_ekyc_attempt_7d"),
             F.max(F.col("ekyc_success_flag")).cast("int").alias("ekyc_verified_success_7d"),
+            F.sum(F.col("ekyc_success_flag")).cast("double").alias("num_ekyc_success_events_7d"),
+            F.sum(F.col("ekyc_fail_flag")).cast("double").alias("num_ekyc_fail_events_7d"),
+            F.max(F.col("ekyc_fail_flag")).cast("int").alias("has_ekyc_fail_7d"),
             F.min(
                 F.when(
                     F.col("ekyc_event_flag") == 1,
@@ -431,14 +652,41 @@ if verification_ts_col:
                     (F.col("v.verification_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
                 )
             ).cast("double").alias("first_ekyc_success_delay_hours_7d"),
+            F.countDistinct("v.verify_type_id").cast("double").alias("num_distinct_verify_types_7d"),
+            F.countDistinct("v.id_card_type").cast("double").alias("num_distinct_id_card_types_7d"),
+            F.avg("v.name_similar").cast("double").alias("avg_name_similar_7d"),
+            F.countDistinct("v.verification_ip").cast("double").alias("num_distinct_verification_ip_7d"),
+            F.countDistinct("v.country_region").cast("double").alias("num_distinct_verification_country_region_7d"),
+            F.max(F.when(F.col("v.country_region").isNotNull() & (F.col("v.country_region") != ""), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_verification_country_region_7d"),
+            F.max(F.col("gender_male_flag")).cast("int").alias("verification_gender_male_7d"),
+            F.max(F.col("gender_female_flag")).cast("int").alias("verification_gender_female_7d"),
+            F.max(
+                F.when(
+                    F.col("v.gender_norm").isNotNull()
+                    & (F.col("v.gender_norm") != "")
+                    & (~gender_male_condition)
+                    & (~gender_female_condition),
+                    F.lit(1),
+                ).otherwise(F.lit(0))
+            ).cast("int").alias("verification_gender_other_7d"),
+            F.max(F.col("v.has_id_card_img")).cast("int").alias("has_id_card_img_7d"),
+            F.max(F.col("v.has_sign_phone_verification")).cast("int").alias("has_sign_phone_verification_7d"),
+            F.max(F.col("v.has_sign_id_card_verification")).cast("int").alias("has_sign_id_card_verification_7d"),
+            F.max(F.when(F.col("v.birth_date_verification").isNotNull(), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_birth_date_verification_7d"),
+            F.avg(F.col("verification_age_years")).cast("double").alias("verification_age_years_7d"),
+            F.countDistinct(F.when(risk_fail_reason_condition, F.col("v.fail_reason_id"))).cast("double").alias("num_verification_fail_reason_distinct_7d"),
+            F.max(F.when(risk_fail_reason_condition, F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_verification_fail_reason_7d"),
+            *verification_country_agg_exprs,
         )
         .withColumn("has_verification_event_7d", F.when(F.col("num_verification_events_7d") > 0, F.lit(1)).otherwise(F.lit(0)))
     )
 else:
-    verification_features = (
+    verification_features_base = (
         registration_base
         .select("user_id", "source_system")
         .withColumn("num_verification_events_7d", F.lit(0.0))
+        .withColumn("num_verification_success_events_7d", F.lit(0.0))
+        .withColumn("num_verification_fail_events_7d", F.lit(0.0))
         .withColumn("verified_in_7d", F.lit(0))
         .withColumn("first_verification_delay_hours_7d", F.lit(None).cast("double"))
         .withColumn("has_verification_event_7d", F.lit(0))
@@ -450,8 +698,165 @@ else:
         .withColumn("num_ekyc_events_7d", F.lit(0.0))
         .withColumn("has_ekyc_attempt_7d", F.lit(0))
         .withColumn("ekyc_verified_success_7d", F.lit(0))
+        .withColumn("num_ekyc_success_events_7d", F.lit(0.0))
+        .withColumn("num_ekyc_fail_events_7d", F.lit(0.0))
+        .withColumn("has_ekyc_fail_7d", F.lit(0))
         .withColumn("first_ekyc_attempt_delay_hours_7d", F.lit(None).cast("double"))
         .withColumn("first_ekyc_success_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("num_distinct_verify_types_7d", F.lit(0.0))
+        .withColumn("num_distinct_id_card_types_7d", F.lit(0.0))
+        .withColumn("avg_name_similar_7d", F.lit(None).cast("double"))
+        .withColumn("num_distinct_verification_ip_7d", F.lit(0.0))
+        .withColumn("num_distinct_verification_country_region_7d", F.lit(0.0))
+        .withColumn("has_verification_country_region_7d", F.lit(0))
+        .withColumn("verification_gender_male_7d", F.lit(0))
+        .withColumn("verification_gender_female_7d", F.lit(0))
+        .withColumn("verification_gender_other_7d", F.lit(0))
+        .withColumn("has_id_card_img_7d", F.lit(0))
+        .withColumn("has_sign_phone_verification_7d", F.lit(0))
+        .withColumn("has_sign_id_card_verification_7d", F.lit(0))
+        .withColumn("has_birth_date_verification_7d", F.lit(0))
+        .withColumn("verification_age_years_7d", F.lit(None).cast("double"))
+        .withColumn("num_verification_fail_reason_distinct_7d", F.lit(0.0))
+        .withColumn("has_verification_fail_reason_7d", F.lit(0))
+    )
+    verification_features = verification_features_base
+    for col_name in verification_country_ohe_cols:
+        verification_features = verification_features.withColumn(col_name, F.lit(0))
+
+# COMMAND ----------
+
+# User remark features in first days after registration
+remark_ts_col = _pick_col(
+    remarks,
+    ["created_time_uae", "created_time", "updated_time_uae", "updated_time"],
+    "remark timestamp",
+    required=False,
+)
+remark_operation_col = _pick_col(remarks, ["operation_type"], "remark operation_type", required=False)
+remark_text_col = _pick_col(remarks, ["remark"], "remark text", required=False)
+
+if remark_ts_col:
+    remarks_base = (
+        remarks
+        .select(
+            F.col("user_id").cast("long").alias("user_id"),
+            F.col("source_system").alias("source_system"),
+            _safe_to_timestamp(remark_ts_col).alias("remark_ts"),
+            F.col(remark_operation_col).cast("int").alias("remark_operation_type") if remark_operation_col else F.lit(None).cast("int").alias("remark_operation_type"),
+            F.lower(F.trim(F.col(remark_text_col).cast("string"))).alias("remark_text") if remark_text_col else F.lit(None).cast("string").alias("remark_text"),
+        )
+        .filter(F.col("remark_ts").isNotNull())
+    )
+
+    risk_remark_pattern = r"(fraud|suspicious|suspend|blocked|block|lock|locked|frozen|exclude|exclusion|abuse|risk|aml)"
+    fraud_remark_pattern = r"(fraud|abuse|aml)"
+    exclusion_remark_pattern = r"(exclude|exclusion)"
+    lock_remark_pattern = r"(blocked|block|lock|locked|frozen)"
+
+    remark_features = (
+        registration_base.alias("r")
+        .join(
+            remarks_base.alias("rm"),
+            (F.col("r.user_id") == F.col("rm.user_id"))
+            & (F.col("r.source_system") == F.col("rm.source_system"))
+            & (F.col("rm.remark_ts") >= F.col("r.registration_ts"))
+            & (F.col("rm.remark_ts") < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(REMARK_WINDOW_DAYS)} DAYS"))),
+            "left",
+        )
+        .groupBy("r.user_id", "r.source_system")
+        .agg(
+            F.count("rm.remark_ts").cast("double").alias("num_user_remarks_7d"),
+            F.countDistinct("rm.remark_operation_type").cast("double").alias("num_distinct_remark_operation_types_7d"),
+            F.max(F.when(F.col("rm.remark_ts").isNotNull(), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_user_remark_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(risk_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_risk_remarks_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(risk_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_risk_remark_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(fraud_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_fraud_remarks_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(fraud_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_fraud_remark_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(exclusion_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_exclusion_remarks_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(exclusion_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_exclusion_remark_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(lock_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_lock_remarks_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(lock_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_lock_remark_7d"),
+        )
+    )
+else:
+    remark_features = (
+        registration_base
+        .select("user_id", "source_system")
+        .withColumn("num_user_remarks_7d", F.lit(0.0))
+        .withColumn("num_distinct_remark_operation_types_7d", F.lit(0.0))
+        .withColumn("has_user_remark_7d", F.lit(0))
+        .withColumn("num_risk_remarks_7d", F.lit(0.0))
+        .withColumn("has_risk_remark_7d", F.lit(0))
+        .withColumn("num_fraud_remarks_7d", F.lit(0.0))
+        .withColumn("has_fraud_remark_7d", F.lit(0))
+        .withColumn("num_exclusion_remarks_7d", F.lit(0.0))
+        .withColumn("has_exclusion_remark_7d", F.lit(0))
+        .withColumn("num_lock_remarks_7d", F.lit(0.0))
+        .withColumn("has_lock_remark_7d", F.lit(0))
+    )
+
+# COMMAND ----------
+
+# Wallet frozen/account-status features in first days after registration
+wallet_ts_col = _pick_col(
+    wallets,
+    ["updated_time_uae", "updated_time", "created_time_uae", "created_time", "latest_effective_time_uae", "latest_effective_time"],
+    "wallet timestamp",
+    required=False,
+)
+wallet_frozen_col = _pick_col(wallets, ["frozen"], "wallet frozen", required=False)
+
+if wallet_ts_col:
+    wallet_base = (
+        wallets
+        .select(
+            F.col("user_id").cast("long").alias("user_id"),
+            F.col("source_system").alias("source_system"),
+            _safe_to_timestamp(wallet_ts_col).alias("wallet_event_ts"),
+            F.col(wallet_frozen_col).cast("double").alias("wallet_frozen") if wallet_frozen_col else F.lit(None).cast("double").alias("wallet_frozen"),
+        )
+        .filter(F.col("wallet_event_ts").isNotNull())
+    )
+
+    wallet_features = (
+        registration_base.alias("r")
+        .join(
+            wallet_base.alias("w"),
+            (F.col("r.user_id") == F.col("w.user_id"))
+            & (F.col("r.source_system") == F.col("w.source_system"))
+            & (F.col("w.wallet_event_ts") >= F.col("r.registration_ts"))
+            & (F.col("w.wallet_event_ts") < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(WALLET_WINDOW_DAYS)} DAYS"))),
+            "left",
+        )
+        .groupBy("r.user_id", "r.source_system")
+        .agg(
+            F.count("w.wallet_event_ts").cast("double").alias("num_wallet_events_7d"),
+            F.max(F.when(F.col("w.wallet_event_ts").isNotNull(), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_wallet_event_7d"),
+            F.max(F.coalesce(F.col("w.wallet_frozen"), F.lit(0.0))).cast("double").alias("wallet_frozen_max_7d"),
+            F.avg(F.coalesce(F.col("w.wallet_frozen"), F.lit(0.0))).cast("double").alias("wallet_frozen_avg_7d"),
+            F.min(
+                F.when(
+                    F.col("w.wallet_event_ts").isNotNull(),
+                    (F.col("w.wallet_event_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
+                )
+            ).cast("double").alias("first_wallet_event_delay_hours_7d"),
+        )
+        .withColumn(
+            "has_wallet_frozen_positive_7d",
+            F.when(F.col("wallet_frozen_max_7d") > 0, F.lit(1)).otherwise(F.lit(0)),
+        )
+    )
+else:
+    wallet_features = (
+        registration_base
+        .select("user_id", "source_system")
+        .withColumn("num_wallet_events_7d", F.lit(0.0))
+        .withColumn("has_wallet_event_7d", F.lit(0))
+        .withColumn("wallet_frozen_max_7d", F.lit(0.0))
+        .withColumn("wallet_frozen_avg_7d", F.lit(0.0))
+        .withColumn("first_wallet_event_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("has_wallet_frozen_positive_7d", F.lit(0))
     )
 
 # COMMAND ----------
@@ -485,8 +890,8 @@ deposit_base = (
         F.col(dep_status_col).cast("int").alias("deposit_status") if dep_status_col else F.lit(None).cast("int").alias("deposit_status"),
         F.col(dep_channel_col).cast("int").alias("deposit_channel_type") if dep_channel_col else F.lit(None).cast("int").alias("deposit_channel_type"),
         F.col(dep_mode_col).cast("int").alias("deposit_mode_type") if dep_mode_col else F.lit(None).cast("int").alias("deposit_mode_type"),
-        F.to_timestamp(F.col(dep_created_ts_col)).alias("attempt_ts"),
-        F.to_timestamp(F.col(dep_success_ts_col)).alias("success_ts") if dep_success_ts_col else F.lit(None).cast("timestamp").alias("success_ts"),
+        _safe_to_timestamp(dep_created_ts_col).alias("attempt_ts"),
+        _safe_to_timestamp(dep_success_ts_col).alias("success_ts") if dep_success_ts_col else F.lit(None).cast("timestamp").alias("success_ts"),
         F.coalesce(F.col(dep_amount_col).cast("double"), F.lit(0.0)).alias("attempt_amount") if dep_amount_col else F.lit(0.0).alias("attempt_amount"),
     )
     .filter(F.col("attempt_ts").isNotNull())
@@ -541,6 +946,8 @@ features = (
     .join(login_method_features.alias("m"), on=["user_id", "source_system"], how="left")
     .join(early_login_features.alias("l"), on=["user_id", "source_system"], how="left")
     .join(verification_features.alias("v"), on=["user_id", "source_system"], how="left")
+    .join(remark_features.alias("rm"), on=["user_id", "source_system"], how="left")
+    .join(wallet_features.alias("w"), on=["user_id", "source_system"], how="left")
     .join(deposit_funnel_features.alias("d"), on=["user_id", "source_system", "registration_ts"], how="left")
     .withColumn("observation_complete", (F.current_timestamp() >= (F.col("registration_ts") + F.expr(f"INTERVAL {int(LABEL_WINDOW_DAYS)} DAYS"))))
     .withColumn("label_deposit_attempt_30d", F.when(F.coalesce(F.col("num_deposit_attempts_30d"), F.lit(0.0)) > 0, F.lit(1)).otherwise(F.lit(0)))
@@ -567,6 +974,9 @@ features = (
             "country_id": 0.0,
             "nation_id": 0.0,
             "resident_country_id": 0.0,
+            "registration_platform_id": 0.0,
+            "registered_by_mobile": 0,
+            "registered_by_desktop": 0,
             "has_marketing_channel": 0,
             "has_marketing_source": 0,
             "has_referrer": 0,
@@ -578,6 +988,7 @@ features = (
             "has_android_id": 0,
             "has_cookie_data": 0,
             "num_user_groups": 0.0,
+            "num_distinct_group_types": 0.0,
             "num_test_groups": 0.0,
             "has_any_group": 0,
             "num_non_test_groups": 0.0,
@@ -590,6 +1001,8 @@ features = (
             "num_distinct_login_ip_24h": 0.0,
             "num_distinct_login_channel_24h": 0.0,
             "num_verification_events_7d": 0.0,
+            "num_verification_success_events_7d": 0.0,
+            "num_verification_fail_events_7d": 0.0,
             "verified_in_7d": 0,
             "has_verification_event_7d": 0,
             "num_kyc_events_7d": 0.0,
@@ -598,6 +1011,41 @@ features = (
             "num_ekyc_events_7d": 0.0,
             "has_ekyc_attempt_7d": 0,
             "ekyc_verified_success_7d": 0,
+            "num_ekyc_success_events_7d": 0.0,
+            "num_ekyc_fail_events_7d": 0.0,
+            "has_ekyc_fail_7d": 0,
+            "num_distinct_verify_types_7d": 0.0,
+            "num_distinct_id_card_types_7d": 0.0,
+            "avg_name_similar_7d": 0.0,
+            "num_distinct_verification_ip_7d": 0.0,
+            "num_distinct_verification_country_region_7d": 0.0,
+            "has_verification_country_region_7d": 0,
+            "verification_gender_male_7d": 0,
+            "verification_gender_female_7d": 0,
+            "verification_gender_other_7d": 0,
+            "has_id_card_img_7d": 0,
+            "has_sign_phone_verification_7d": 0,
+            "has_sign_id_card_verification_7d": 0,
+            "has_birth_date_verification_7d": 0,
+            "verification_age_years_7d": 0.0,
+            "num_verification_fail_reason_distinct_7d": 0.0,
+            "has_verification_fail_reason_7d": 0,
+            "num_user_remarks_7d": 0.0,
+            "num_distinct_remark_operation_types_7d": 0.0,
+            "has_user_remark_7d": 0,
+            "num_risk_remarks_7d": 0.0,
+            "has_risk_remark_7d": 0,
+            "num_fraud_remarks_7d": 0.0,
+            "has_fraud_remark_7d": 0,
+            "num_exclusion_remarks_7d": 0.0,
+            "has_exclusion_remark_7d": 0,
+            "num_lock_remarks_7d": 0.0,
+            "has_lock_remark_7d": 0,
+            "num_wallet_events_7d": 0.0,
+            "has_wallet_event_7d": 0,
+            "wallet_frozen_max_7d": 0.0,
+            "wallet_frozen_avg_7d": 0.0,
+            "has_wallet_frozen_positive_7d": 0,
             "num_deposit_attempts_30d": 0.0,
             "num_deposit_success_30d": 0.0,
             "num_deposit_failure_30d": 0.0,
@@ -613,18 +1061,19 @@ features = (
 # COMMAND ----------
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
-spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
 
 for analysis in get_analyses_to_run():
     analysis_name = ANALYSIS_NAMES[analysis]
+    filtered_features = _apply_analysis_source_filter(features, analysis)
     published = publish_table(
         spark=spark,
-        df=features.withColumn("created_at", F.current_timestamp()),
+        df=filtered_features.withColumn("created_at", F.current_timestamp()),
         table_base=f"{T_FUNNEL_FEATURES_PREFIX}_{analysis_name}",
         analysis_name=analysis_name,
         current_mode="view",
         primary_keys=["unique_user_id", "run_ts"],
         timeseries_column="run_ts",
+        append_merge_schema=True,
     )
     print(
         f"Published features: {published['snapshot_table']} and {published['current_table']} "
