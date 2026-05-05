@@ -345,10 +345,7 @@ def _render_feature_detail_panel(segments_df: pd.DataFrame, feature_name: str) -
     total_users = float(chart_df["users"].sum())
     total_converted = float(chart_df["converted_users"].sum())
     overall_conversion_rate = (total_converted / total_users) if total_users > 0 else 0.0
-    chart_df["share_delta_pp"] = (chart_df["share_in_converted"] - chart_df["share_in_non_converted"]) * 100.0
     chart_df["conversion_lift_pp"] = (chart_df["conversion_rate"] - overall_conversion_rate) * 100.0
-    chart_df["share_index"] = chart_df["share_in_converted"] / chart_df["share_in_non_converted"]
-    chart_df.loc[chart_df["share_in_non_converted"] <= 0, "share_index"] = None
 
     left_col, right_col = st.columns(2)
 
@@ -382,36 +379,10 @@ def _render_feature_detail_panel(segments_df: pd.DataFrame, feature_name: str) -
 
     st.markdown("###### Normalized comparison")
     st.caption(
-        "Positive values mean the segment is stronger among converted users than non-converted users, "
-        "after normalizing by each class size."
+        "Positive values mean segment conversion is above overall baseline."
     )
-
-    norm_left, norm_right = st.columns(2)
-    with norm_left:
-        zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9AA4B2").encode(y="y:Q")
-        share_delta_chart = (
-            alt.Chart(chart_df)
-            .mark_bar()
-            .encode(
-                x=alt.X("segment_label:N", sort=sort_order, title="Segment"),
-                y=alt.Y("share_delta_pp:Q", title="Share delta (pp)"),
-                color=alt.condition(
-                    "datum.share_delta_pp >= 0",
-                    alt.value("#2EBD85"),
-                    alt.value("#E76F51"),
-                ),
-                tooltip=[
-                    "segment_label",
-                    alt.Tooltip("share_in_converted:Q", title="share_converted", format=".2%"),
-                    alt.Tooltip("share_in_non_converted:Q", title="share_non_converted", format=".2%"),
-                    alt.Tooltip("share_delta_pp:Q", title="delta_pp", format=".2f"),
-                    alt.Tooltip("share_index:Q", title="share_index", format=".2f"),
-                ],
-            )
-        )
-        st.altair_chart(alt.layer(zero_rule, share_delta_chart), use_container_width=True)
-
-    with norm_right:
+    pad_left, center_col, pad_right = st.columns([1, 2, 1])
+    with center_col:
         zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9AA4B2").encode(y="y:Q")
         lift_chart = (
             alt.Chart(chart_df)
