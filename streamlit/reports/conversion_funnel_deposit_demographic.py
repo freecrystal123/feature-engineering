@@ -47,13 +47,13 @@ FEATURE_NAME_ALIASES = {
 }
 
 WEEKDAY_LABELS = {
-    1: "Sun",
-    2: "Mon",
-    3: "Tue",
-    4: "Wed",
-    5: "Thu",
-    6: "Fri",
-    7: "Sat",
+    1: "sunday",
+    2: "monday",
+    3: "tuesday",
+    4: "wednesday",
+    5: "thursday",
+    6: "friday",
+    7: "saturday",
 }
 
 
@@ -342,6 +342,13 @@ def _render_feature_detail_panel(segments_df: pd.DataFrame, feature_name: str) -
     chart_df = fdf.sort_values(["segment_order", "users"], ascending=[True, False]).copy()
     chart_df["segment_label"] = chart_df["segment_value"].astype(str).apply(lambda x: _classic_segment_label(feature_name, x))
     sort_order = chart_df["segment_label"].tolist()
+    total_users = float(chart_df["users"].sum())
+    total_converted = float(chart_df["converted_users"].sum())
+    overall_conversion_rate = (total_converted / total_users) if total_users > 0 else 0.0
+    chart_df["share_delta_pp"] = (chart_df["share_in_converted"] - chart_df["share_in_non_converted"]) * 100.0
+    chart_df["conversion_lift_pp"] = (chart_df["conversion_rate"] - overall_conversion_rate) * 100.0
+    chart_df["share_index"] = chart_df["share_in_converted"] / chart_df["share_in_non_converted"]
+    chart_df.loc[chart_df["share_in_non_converted"] <= 0, "share_index"] = None
 
     left_col, right_col = st.columns(2)
 
@@ -373,7 +380,63 @@ def _render_feature_detail_panel(segments_df: pd.DataFrame, feature_name: str) -
         )
         st.altair_chart(conv_chart, use_container_width=True)
 
+    st.markdown("###### Normalized comparison")
+    st.caption(
+        "Positive values mean the segment is stronger among converted users than non-converted users, "
+        "after normalizing by each class size."
+    )
+
+    norm_left, norm_right = st.columns(2)
+    with norm_left:
+        zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9AA4B2").encode(y="y:Q")
+        share_delta_chart = (
+            alt.Chart(chart_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("segment_label:N", sort=sort_order, title="Segment"),
+                y=alt.Y("share_delta_pp:Q", title="Share delta (pp)"),
+                color=alt.condition(
+                    "datum.share_delta_pp >= 0",
+                    alt.value("#2EBD85"),
+                    alt.value("#E76F51"),
+                ),
+                tooltip=[
+                    "segment_label",
+                    alt.Tooltip("share_in_converted:Q", title="share_converted", format=".2%"),
+                    alt.Tooltip("share_in_non_converted:Q", title="share_non_converted", format=".2%"),
+                    alt.Tooltip("share_delta_pp:Q", title="delta_pp", format=".2f"),
+                    alt.Tooltip("share_index:Q", title="share_index", format=".2f"),
+                ],
+            )
+        )
+        st.altair_chart(alt.layer(zero_rule, share_delta_chart), use_container_width=True)
+
+    with norm_right:
+        zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#9AA4B2").encode(y="y:Q")
+        lift_chart = (
+            alt.Chart(chart_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("segment_label:N", sort=sort_order, title="Segment"),
+                y=alt.Y("conversion_lift_pp:Q", title="Conversion lift vs overall (pp)"),
+                color=alt.condition(
+                    "datum.conversion_lift_pp >= 0",
+                    alt.value("#2EBD85"),
+                    alt.value("#E76F51"),
+                ),
+                tooltip=[
+                    "segment_label",
+                    alt.Tooltip("conversion_rate:Q", title="segment_conversion_rate", format=".2%"),
+                    alt.Tooltip("conversion_lift_pp:Q", title="lift_pp", format=".2f"),
+                    alt.Tooltip("users:Q", format=","),
+                    alt.Tooltip("population_pct:Q", format=".2%"),
+                ],
+            )
+        )
+        st.altair_chart(alt.layer(zero_rule, lift_chart), use_container_width=True)
+
     st.markdown("###### Segment conversion")
+    st.caption(f"Overall conversion baseline for this feature: {_fmt_pct(overall_conversion_rate)}")
     conv_rate_chart = (
         alt.Chart(chart_df)
         .mark_bar()
