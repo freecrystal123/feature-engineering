@@ -62,7 +62,7 @@ def _inject_css() -> None:
             display: flex;
             align-items: center;
             gap: 10px;
-            margin: 2px 0 12px 0;
+            margin: 2px 0 56px 0;
           }
 
           .sidebar-brand-icon {
