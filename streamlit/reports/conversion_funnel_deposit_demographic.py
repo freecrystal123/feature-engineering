@@ -10,7 +10,7 @@ import streamlit as st
 from core.databricks_query_service import data_select, resolve_sql_http_path
 
 REPORT_META = {
-    "title": "Deposit Conversion Demographic Deep Dive",
+    "title": "Deposit Conversion Funnel Demographics",
     "schema": "conversion_funnel_deposit",
     # "environments": ("training", "production"),
     "environments": ("training"),
@@ -541,12 +541,16 @@ def render(context: dict | None = None) -> None:
     analysis_options = _analysis_options()
     if default_analysis not in analysis_options:
         analysis_options = [default_analysis] + analysis_options
-    default_idx = analysis_options.index(default_analysis)
+    analysis_widget_key = (
+        f"funnel_demographic_analysis_select_{str(context.get('environment', 'other')).strip().lower()}"
+    )
+    if analysis_widget_key not in st.session_state or st.session_state[analysis_widget_key] not in analysis_options:
+        st.session_state[analysis_widget_key] = default_analysis if default_analysis in analysis_options else analysis_options[0]
 
     analysis_name = st.selectbox(
         "Analysis",
         options=analysis_options,
-        index=default_idx,
+        key=analysis_widget_key,
         help="Select which conversion funnel analysis to display.",
     )
 

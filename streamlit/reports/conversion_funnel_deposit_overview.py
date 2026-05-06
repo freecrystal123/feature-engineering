@@ -10,7 +10,7 @@ import streamlit as st
 from core.databricks_query_service import data_select, resolve_sql_http_path
 
 REPORT_META = {
-    "title": "Deposit Conversion Funnel",
+    "title": "Deposit Conversion Funnel SHAP",
     "schema": "conversion_funnel_deposit",
     # "environments": ("training", "production"),
     "environments": ("training"),
@@ -165,12 +165,16 @@ def render(context: dict | None = None) -> None:
     analysis_options = _analysis_options()
     if default_analysis not in analysis_options:
         analysis_options = [default_analysis] + analysis_options
-    default_idx = analysis_options.index(default_analysis)
+    analysis_widget_key = (
+        f"funnel_overview_analysis_select_{str(context.get('environment', 'other')).strip().lower()}"
+    )
+    if analysis_widget_key not in st.session_state or st.session_state[analysis_widget_key] not in analysis_options:
+        st.session_state[analysis_widget_key] = default_analysis if default_analysis in analysis_options else analysis_options[0]
 
     analysis_name = st.selectbox(
         "Analysis",
         options=analysis_options,
-        index=default_idx,
+        key=analysis_widget_key,
         help="Select which conversion funnel analysis to display.",
     )
 
@@ -206,10 +210,41 @@ def render(context: dict | None = None) -> None:
         "success_rate_30d",
         "failed_given_attempt_rate_30d",
     ]].copy()
-    trend_df["registration_month"] = trend_df["registration_month"].dt.strftime("%Y-%m")
-    trend_df = trend_df.set_index("registration_month")
+    trend_long = trend_df.melt(
+        id_vars=["registration_month"],
+        value_vars=["attempt_rate_30d", "success_rate_30d", "failed_given_attempt_rate_30d"],
+        var_name="metric",
+        value_name="rate",
+    )
+    metric_label_map = {
+        "attempt_rate_30d": "Attempt rate (30d)",
+        "success_rate_30d": "Success rate (30d)",
+        "failed_given_attempt_rate_30d": "Failed | Attempt rate (30d)",
+    }
+    trend_long["metric_label"] = trend_long["metric"].map(metric_label_map).fillna(trend_long["metric"])
     st.markdown("##### Funnel trend by cohort month")
-    st.line_chart(trend_df, use_container_width=True)
+    trend_chart = (
+        alt.Chart(trend_long)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("registration_month:T", title="Cohort month", axis=alt.Axis(format="%Y-%m")),
+            y=alt.Y("rate:Q", title="Rate"),
+            color=alt.Color(
+                "metric_label:N",
+                title="Metric",
+                scale=alt.Scale(
+                    domain=["Attempt rate (30d)", "Success rate (30d)", "Failed | Attempt rate (30d)"],
+                    range=["#4C78A8", "#2EBD85", "#E76F51"],
+                ),
+            ),
+            tooltip=[
+                alt.Tooltip("registration_month:T", title="Cohort month", format="%Y-%m"),
+                alt.Tooltip("metric_label:N", title="Metric"),
+                alt.Tooltip("rate:Q", title="Rate", format=".2%"),
+            ],
+        )
+    )
+    st.altair_chart(trend_chart, use_container_width=True)
 
     st.markdown("##### Cohort table")
     display_df = funnel_df.sort_values("registration_month", ascending=False).copy()

@@ -28,6 +28,7 @@ MAX_TEXT_PREVIEW_BYTES = 300_000
 NO_SELECTION_KEY = "__none__"
 SIDEBAR_REPORT_KEY = "sidebar_report_radio"
 SIDEBAR_ENV_KEY = "sidebar_reports_environment"
+SIDEBAR_EMPTY_LABEL = "__select_report__"
 
 
 def _inject_css() -> None:
@@ -55,6 +56,28 @@ def _inject_css() -> None:
           section[data-testid="stSidebar"] {
             border-right: 1px solid #22334f;
             background: linear-gradient(180deg, #0b1425 0%, #0a1220 100%);
+          }
+
+          .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 2px 0 12px 0;
+          }
+
+          .sidebar-brand-icon {
+            font-size: 38px;
+            line-height: 1;
+            filter: grayscale(1) saturate(0) contrast(1.2) brightness(1.35);
+          }
+
+          .sidebar-brand-text {
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 30px;
+            line-height: 1.05;
+            font-weight: 700;
+            color: #f3f7ff;
+            letter-spacing: 0.2px;
           }
 
           .main .block-container {
@@ -326,9 +349,15 @@ def _build_catalog_entries(core_rows: list[dict], streamlit_rows: list[dict]) ->
 
 
 def _render_sidebar_menu(entries: list[dict]) -> str:
-    if st.sidebar.button("Home", use_container_width=True):
-        st.session_state[SIDEBAR_REPORT_KEY] = None
-        st.rerun()
+    st.sidebar.markdown(
+        """
+        <div class="sidebar-brand">
+          <span class="sidebar-brand-icon">🧠</span>
+          <span class="sidebar-brand-text">ML Viewer</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     env_options = ["production", "training"]
     env_labels = {
@@ -357,28 +386,31 @@ def _render_sidebar_menu(entries: list[dict]) -> str:
         for item in filtered_entries
     }
 
-    if SIDEBAR_REPORT_KEY not in st.session_state:
-        st.session_state[SIDEBAR_REPORT_KEY] = None
-
     if not options:
         st.sidebar.info("No reports available for this environment.")
-        st.session_state[SIDEBAR_REPORT_KEY] = None
+        st.session_state[SIDEBAR_REPORT_KEY] = SIDEBAR_EMPTY_LABEL
         return NO_SELECTION_KEY
 
-    current_value = st.session_state.get(SIDEBAR_REPORT_KEY)
-    if current_value not in options:
-        st.session_state[SIDEBAR_REPORT_KEY] = None
+    sidebar_options = [SIDEBAR_EMPTY_LABEL] + options
+    labels[SIDEBAR_EMPTY_LABEL] = "Home"
 
-    st.sidebar.radio(
+    if SIDEBAR_REPORT_KEY not in st.session_state:
+        st.session_state[SIDEBAR_REPORT_KEY] = SIDEBAR_EMPTY_LABEL
+
+    current_value = st.session_state.get(SIDEBAR_REPORT_KEY)
+    if current_value not in sidebar_options:
+        st.session_state[SIDEBAR_REPORT_KEY] = SIDEBAR_EMPTY_LABEL
+
+    selected = st.sidebar.radio(
         "Available reports",
-        options=options,
-        index=None,
+        options=sidebar_options,
+        index=sidebar_options.index(str(st.session_state[SIDEBAR_REPORT_KEY])),
         format_func=lambda key: labels[str(key)],
         key=SIDEBAR_REPORT_KEY,
         label_visibility="collapsed",
     )
-    selected = st.session_state.get(SIDEBAR_REPORT_KEY)
-    if selected is None:
+
+    if selected == SIDEBAR_EMPTY_LABEL:
         return NO_SELECTION_KEY
     return str(selected)
 
