@@ -126,7 +126,11 @@ login_logs = spark.table(SILVER_USER_LOGIN_LOG)
 verification = spark.table(SILVER_USER_VERIFICATION)
 remarks = spark.table(SILVER_USER_REMARK)
 deposit = spark.table(SILVER_WALLET_DEPOSIT)
-wallets = spark.table(SILVER_WALLET_WALLET)
+wallet_transactions = (
+    spark.table(SILVER_WALLET_TRANSACTION_ORDER)
+    if spark.catalog.tableExists(SILVER_WALLET_TRANSACTION_ORDER)
+    else None
+)
 
 # COMMAND ----------
 
@@ -296,6 +300,86 @@ else:
 
 # COMMAND ----------
 
+# Pre-deposit cutoff per user:
+# first successful deposit within 30d after registration; if none, registration + 30d.
+dep_cutoff_user_col = _pick_col(deposit, ["user_id"], "deposit user_id for predeposit cutoff", required=False)
+dep_cutoff_source_col = _pick_col(deposit, ["source_system"], "deposit source_system for predeposit cutoff", required=False)
+dep_cutoff_ts_col = _pick_col(
+    deposit,
+    ["created_time_uae", "created_time", "updated_time_uae", "updated_time"],
+    "deposit attempt timestamp for predeposit cutoff",
+    required=False,
+)
+dep_cutoff_success_ts_col = _pick_col(
+    deposit,
+    ["success_time_uae", "success_time"],
+    "deposit success timestamp for predeposit cutoff",
+    required=False,
+)
+dep_cutoff_status_col = _pick_col(deposit, ["deposit_status"], "deposit status for predeposit cutoff", required=False)
+dep_cutoff_channel_col = _pick_col(deposit, ["deposit_channel_type"], "deposit channel for predeposit cutoff", required=False)
+
+registration_with_predeposit_cutoff = (
+    registration_base
+    .select("user_id", "source_system", "registration_ts")
+    .withColumn("predeposit_cutoff_ts", F.col("registration_ts") + F.expr(f"INTERVAL {int(LABEL_WINDOW_DAYS)} DAYS"))
+)
+
+if dep_cutoff_user_col and dep_cutoff_source_col and dep_cutoff_ts_col:
+    deposit_cutoff_base = (
+        deposit
+        .select(
+            F.col(dep_cutoff_user_col).cast("long").alias("user_id"),
+            F.col(dep_cutoff_source_col).alias("source_system"),
+            _safe_to_timestamp(dep_cutoff_ts_col).alias("attempt_ts"),
+            _safe_to_timestamp(dep_cutoff_success_ts_col).alias("success_ts") if dep_cutoff_success_ts_col else F.lit(None).cast("timestamp").alias("success_ts"),
+            F.col(dep_cutoff_status_col).cast("int").alias("deposit_status") if dep_cutoff_status_col else F.lit(None).cast("int").alias("deposit_status"),
+            F.col(dep_cutoff_channel_col).cast("int").alias("deposit_channel_type") if dep_cutoff_channel_col else F.lit(None).cast("int").alias("deposit_channel_type"),
+        )
+        .filter(F.col("attempt_ts").isNotNull())
+    )
+
+    if dep_cutoff_channel_col:
+        deposit_cutoff_base = deposit_cutoff_base.filter(
+            (F.col("deposit_channel_type") < 100)
+            | (F.col("deposit_channel_type") >= 200)
+            | F.col("deposit_channel_type").isNull()
+        )
+
+    deposit_success_event_expr = F.when(
+        (F.col("d.deposit_status") == 3) | F.col("d.success_ts").isNotNull(),
+        F.coalesce(F.col("d.success_ts"), F.col("d.attempt_ts")),
+    )
+
+    first_deposit_success_30d = (
+        registration_base.alias("r")
+        .join(
+            deposit_cutoff_base.alias("d"),
+            (F.col("r.user_id") == F.col("d.user_id"))
+            & (F.col("r.source_system") == F.col("d.source_system"))
+            & (deposit_success_event_expr >= F.col("r.registration_ts"))
+            & (deposit_success_event_expr < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(LABEL_WINDOW_DAYS)} DAYS"))),
+            "left",
+        )
+        .groupBy("r.user_id", "r.source_system", "r.registration_ts")
+        .agg(F.min(deposit_success_event_expr).alias("first_deposit_success_ts"))
+    )
+
+    registration_with_predeposit_cutoff = (
+        registration_base.alias("r")
+        .join(first_deposit_success_30d.alias("d"), on=["user_id", "source_system", "registration_ts"], how="left")
+        .withColumn(
+            "predeposit_cutoff_ts",
+            F.coalesce(
+                F.col("d.first_deposit_success_ts"),
+                F.col("r.registration_ts") + F.expr(f"INTERVAL {int(LABEL_WINDOW_DAYS)} DAYS"),
+            ),
+        )
+        .select("r.user_id", "r.source_system", "r.registration_ts", "predeposit_cutoff_ts")
+    )
+
+# COMMAND ----------
+
 # Latest user profile snapshot per user
 profile_user_id_col = _pick_col(profiles, ["user_id"], "profile user_id")
 profile_source_col = _pick_col(profiles, ["source_system"], "profile source_system")
@@ -419,13 +503,19 @@ if login_log_ts_col:
     )
 
     early_login_features = (
-        registration_base.alias("r")
+        registration_with_predeposit_cutoff.alias("r")
         .join(
             login_logs_base.alias("l"),
             (F.col("r.user_id") == F.col("l.user_id"))
             & (F.col("r.source_system") == F.col("l.source_system"))
             & (F.col("l.login_event_ts") >= F.col("r.registration_ts"))
-            & (F.col("l.login_event_ts") < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(EARLY_ACTIVITY_HOURS)} HOURS"))),
+            & (
+                F.col("l.login_event_ts")
+                < F.least(
+                    F.col("r.predeposit_cutoff_ts"),
+                    (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(EARLY_ACTIVITY_HOURS)} HOURS")),
+                )
+            ),
             "left",
         )
         .groupBy("r.user_id", "r.source_system")
@@ -561,13 +651,19 @@ if verification_ts_col:
     gender_female_condition = F.col("v.gender_norm").rlike("^(f|female|feminino|2)$")
 
     verification_features = (
-        registration_base.alias("r")
+        registration_with_predeposit_cutoff.alias("r")
         .join(
             verification_base.alias("v"),
             (F.col("r.user_id") == F.col("v.user_id"))
             & (F.col("r.source_system") == F.col("v.source_system"))
             & (F.col("v.verification_ts") >= F.col("r.registration_ts"))
-            & (F.col("v.verification_ts") < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(VERIFICATION_WINDOW_DAYS)} DAYS"))),
+            & (
+                F.col("v.verification_ts")
+                < F.least(
+                    F.col("r.predeposit_cutoff_ts"),
+                    (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(VERIFICATION_WINDOW_DAYS)} DAYS")),
+                )
+            ),
             "left",
         )
         .withColumn(
@@ -735,8 +831,53 @@ remark_ts_col = _pick_col(
 )
 remark_operation_col = _pick_col(remarks, ["operation_type"], "remark operation_type", required=False)
 remark_text_col = _pick_col(remarks, ["remark"], "remark text", required=False)
+remark_flow_step_ohe_values = [
+    "account_created",
+    "ekyc_failed",
+    "ekyc_verified",
+    "kyc_failed",
+    "kyc_verified",
+    "system_face_failed",
+    "system_face_verified",
+    "address_added",
+    "address_changed",
+    "email_added",
+    "email_changed",
+    "phone_changed",
+    "password_changed",
+    "self_exclusion",
+    "deposit_limit",
+    "bet_limit",
+    "customer_request",
+    "lock_suspend_ban",
+    "risk_investigation",
+    "other",
+]
 
 if remark_ts_col:
+    post_deposit_marker_pattern = r"(first deposit|first withdrawal)"
+    risk_remark_pattern = r"(fraud|chargeback|suspicious|suspit|suspec|suspect|scam|under investigation|suspend|blocked|block|lock|locked|frozen|exclude|exclusion|abuse|risk|aml)"
+    fraud_remark_pattern = r"(fraud|chargeback|abuse|aml|ato attack)"
+    exclusion_remark_pattern = r"(exclude|exclusion|self-exclusion)"
+    lock_remark_pattern = r"(blocked|block|lock|locked|frozen|suspend|suspended|black list|blacklist|ban)"
+    account_created_pattern = r"^creation account$"
+    address_added_pattern = r"add address"
+    address_changed_pattern = r"address .* (is changed to|changed to)"
+    email_added_pattern = r"(^mail: null -|initial email address: null new email address|mail account: null is changed to)"
+    email_changed_pattern = r"(^mail: .* - .*|mail account: .* is changed to|initial email address: .* new email address)"
+    phone_changed_pattern = r"(phone number: .* is changed to|phone number changed|mobile number update|phone number: .* - .*)"
+    password_changed_pattern = r"(change password)"
+    ekyc_verified_pattern = r"(ekyc information modification: verified|ekyc.*verified)"
+    ekyc_failed_pattern = r"(ekyc information modification: verification failed|ekyc information modification: not verified|ekyc information modification: black list|ekyc.*verification failed|ekyc.*not verified|ekyc.*black list|ekyc.*under review)"
+    kyc_verified_pattern = r"((^|[^a-z])kyc information modification: verified)"
+    kyc_failed_pattern = r"((^|[^a-z])kyc information modification: verification failed|(^|[^a-z])kyc information modification: not verified|(^|[^a-z])kyc information modification: black list|(^|[^a-z])kyc.*verification failed|(^|[^a-z])kyc.*not verified|(^|[^a-z])kyc.*black list|(^|[^a-z])kyc.*under review)"
+    system_face_verified_pattern = r"(system_face: verified)"
+    system_face_failed_pattern = r"(system_face: verification failed|system_face: not verified|system_face: black list|system_face: under review)"
+    self_exclusion_pattern = r"(user exclusion type self-exclusion)"
+    deposit_limit_pattern = r"(user exclusion type deposit limit)"
+    bet_limit_pattern = r"(user exclusion type bet limit)"
+    customer_request_pattern = r"(customer request|customer requested|user requested|requested to|requesting|account deletion|close the account|account suspension|unsuspend)"
+
     remarks_base = (
         remarks
         .select(
@@ -744,31 +885,93 @@ if remark_ts_col:
             F.col("source_system").alias("source_system"),
             _safe_to_timestamp(remark_ts_col).alias("remark_ts"),
             F.col(remark_operation_col).cast("int").alias("remark_operation_type") if remark_operation_col else F.lit(None).cast("int").alias("remark_operation_type"),
-            F.lower(F.trim(F.col(remark_text_col).cast("string"))).alias("remark_text") if remark_text_col else F.lit(None).cast("string").alias("remark_text"),
+            F.trim(
+                F.regexp_replace(
+                    F.regexp_replace(
+                        F.lower(F.coalesce(F.col(remark_text_col).cast("string"), F.lit(""))),
+                        r"<[^>]+>",
+                        " ",
+                    ),
+                    r"\s+",
+                    " ",
+                )
+            ).alias("remark_text") if remark_text_col else F.lit(None).cast("string").alias("remark_text"),
         )
         .filter(F.col("remark_ts").isNotNull())
+        # Avoid leakage: these remarks explicitly indicate successful deposit/withdrawal.
+        .filter(~F.coalesce(F.col("remark_text").rlike(post_deposit_marker_pattern), F.lit(False)))
     )
 
-    risk_remark_pattern = r"(fraud|suspicious|suspend|blocked|block|lock|locked|frozen|exclude|exclusion|abuse|risk|aml)"
-    fraud_remark_pattern = r"(fraud|abuse|aml)"
-    exclusion_remark_pattern = r"(exclude|exclusion)"
-    lock_remark_pattern = r"(blocked|block|lock|locked|frozen)"
-
-    remark_features = (
-        registration_base.alias("r")
+    remark_enriched = (
+        registration_with_predeposit_cutoff.alias("r")
         .join(
             remarks_base.alias("rm"),
             (F.col("r.user_id") == F.col("rm.user_id"))
             & (F.col("r.source_system") == F.col("rm.source_system"))
             & (F.col("rm.remark_ts") >= F.col("r.registration_ts"))
-            & (F.col("rm.remark_ts") < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(REMARK_WINDOW_DAYS)} DAYS"))),
+            & (
+                F.col("rm.remark_ts")
+                < F.least(
+                    F.col("r.predeposit_cutoff_ts"),
+                    (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(REMARK_WINDOW_DAYS)} DAYS")),
+                )
+            ),
             "left",
         )
+        .withColumn(
+            "remark_delay_hours",
+            F.when(
+                F.col("rm.remark_ts").isNotNull(),
+                (F.col("rm.remark_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
+            ).otherwise(F.lit(None).cast("double")),
+        )
+        .withColumn(
+            "remark_flow_step",
+            F.when(F.col("rm.remark_ts").isNull(), F.lit(None).cast("string"))
+            .when(F.col("rm.remark_text").rlike(account_created_pattern), F.lit("account_created"))
+            .when(F.col("rm.remark_text").rlike(ekyc_failed_pattern), F.lit("ekyc_failed"))
+            .when(F.col("rm.remark_text").rlike(ekyc_verified_pattern), F.lit("ekyc_verified"))
+            .when(F.col("rm.remark_text").rlike(kyc_failed_pattern), F.lit("kyc_failed"))
+            .when(F.col("rm.remark_text").rlike(kyc_verified_pattern), F.lit("kyc_verified"))
+            .when(F.col("rm.remark_text").rlike(system_face_failed_pattern), F.lit("system_face_failed"))
+            .when(F.col("rm.remark_text").rlike(system_face_verified_pattern), F.lit("system_face_verified"))
+            .when(F.col("rm.remark_text").rlike(address_added_pattern), F.lit("address_added"))
+            .when(F.col("rm.remark_text").rlike(address_changed_pattern), F.lit("address_changed"))
+            .when(F.col("rm.remark_text").rlike(email_added_pattern), F.lit("email_added"))
+            .when(F.col("rm.remark_text").rlike(email_changed_pattern), F.lit("email_changed"))
+            .when(F.col("rm.remark_text").rlike(phone_changed_pattern), F.lit("phone_changed"))
+            .when(F.col("rm.remark_text").rlike(password_changed_pattern), F.lit("password_changed"))
+            .when(F.col("rm.remark_text").rlike(self_exclusion_pattern), F.lit("self_exclusion"))
+            .when(F.col("rm.remark_text").rlike(deposit_limit_pattern), F.lit("deposit_limit"))
+            .when(F.col("rm.remark_text").rlike(bet_limit_pattern), F.lit("bet_limit"))
+            .when(F.col("rm.remark_text").rlike(customer_request_pattern), F.lit("customer_request"))
+            .when(F.col("rm.remark_text").rlike(lock_remark_pattern), F.lit("lock_suspend_ban"))
+            .when(F.col("rm.remark_text").rlike(risk_remark_pattern), F.lit("risk_investigation"))
+            .otherwise(F.lit("other"))
+        )
+    )
+    remark_flow_step_ohe_agg_exprs = []
+    for flow_step in remark_flow_step_ohe_values:
+        remark_flow_step_ohe_agg_exprs.append(
+            F.sum(
+                F.when(F.col("remark_flow_step") == F.lit(flow_step), F.lit(1)).otherwise(F.lit(0))
+            ).cast("double").alias(f"num_remark_flow_step_{flow_step}_7d")
+        )
+        remark_flow_step_ohe_agg_exprs.append(
+            F.max(
+                F.when(F.col("remark_flow_step") == F.lit(flow_step), F.lit(1)).otherwise(F.lit(0))
+            ).cast("int").alias(f"has_remark_flow_step_{flow_step}_7d")
+        )
+
+    remark_features = (
+        remark_enriched
         .groupBy("r.user_id", "r.source_system")
         .agg(
             F.count("rm.remark_ts").cast("double").alias("num_user_remarks_7d"),
             F.countDistinct("rm.remark_operation_type").cast("double").alias("num_distinct_remark_operation_types_7d"),
+            F.countDistinct(F.when(F.col("rm.remark_ts").isNotNull(), F.col("remark_flow_step"))).cast("double").alias("num_distinct_remark_flow_steps_7d"),
             F.max(F.when(F.col("rm.remark_ts").isNotNull(), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_user_remark_7d"),
+            F.min(F.col("remark_delay_hours")).cast("double").alias("first_user_remark_delay_hours_7d"),
             F.sum(F.when(F.col("rm.remark_text").rlike(risk_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_risk_remarks_7d"),
             F.max(F.when(F.col("rm.remark_text").rlike(risk_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_risk_remark_7d"),
             F.sum(F.when(F.col("rm.remark_text").rlike(fraud_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_fraud_remarks_7d"),
@@ -777,6 +980,44 @@ if remark_ts_col:
             F.max(F.when(F.col("rm.remark_text").rlike(exclusion_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_exclusion_remark_7d"),
             F.sum(F.when(F.col("rm.remark_text").rlike(lock_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_lock_remarks_7d"),
             F.max(F.when(F.col("rm.remark_text").rlike(lock_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_lock_remark_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(account_created_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_account_created_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(account_created_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_account_created_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(address_added_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_address_added_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(address_added_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_address_added_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(address_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_address_changed_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(address_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_address_changed_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(email_added_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_email_added_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(email_added_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_email_added_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(email_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_email_changed_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(email_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_email_changed_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(phone_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_phone_changed_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(phone_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_phone_changed_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(password_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_password_changed_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(password_changed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_password_changed_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(ekyc_verified_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_ekyc_verified_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(ekyc_verified_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_ekyc_verified_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(ekyc_failed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_ekyc_failed_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(ekyc_failed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_ekyc_failed_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(kyc_verified_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_kyc_verified_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(kyc_verified_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_kyc_verified_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(kyc_failed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_kyc_failed_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(kyc_failed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_kyc_failed_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(system_face_verified_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_system_face_verified_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(system_face_verified_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_system_face_verified_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(system_face_failed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_system_face_failed_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(system_face_failed_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_system_face_failed_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(self_exclusion_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_self_exclusion_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(self_exclusion_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_self_exclusion_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(deposit_limit_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_deposit_limit_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(deposit_limit_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_deposit_limit_7d"),
+            F.sum(F.when(F.col("rm.remark_text").rlike(customer_request_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_remark_customer_request_7d"),
+            F.max(F.when(F.col("rm.remark_text").rlike(customer_request_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_remark_customer_request_7d"),
+            F.min(F.when(F.col("rm.remark_text").rlike(address_added_pattern), F.col("remark_delay_hours"))).cast("double").alias("first_remark_address_added_delay_hours_7d"),
+            F.min(F.when(F.col("rm.remark_text").rlike(ekyc_verified_pattern), F.col("remark_delay_hours"))).cast("double").alias("first_remark_ekyc_verified_delay_hours_7d"),
+            F.min(F.when(F.col("rm.remark_text").rlike(ekyc_failed_pattern), F.col("remark_delay_hours"))).cast("double").alias("first_remark_ekyc_failed_delay_hours_7d"),
+            F.min(F.when(F.col("rm.remark_text").rlike(customer_request_pattern), F.col("remark_delay_hours"))).cast("double").alias("first_remark_customer_request_delay_hours_7d"),
+            F.min(F.when(F.col("rm.remark_text").rlike(lock_remark_pattern), F.col("remark_delay_hours"))).cast("double").alias("first_remark_lock_delay_hours_7d"),
+            *remark_flow_step_ohe_agg_exprs,
         )
     )
 else:
@@ -785,7 +1026,9 @@ else:
         .select("user_id", "source_system")
         .withColumn("num_user_remarks_7d", F.lit(0.0))
         .withColumn("num_distinct_remark_operation_types_7d", F.lit(0.0))
+        .withColumn("num_distinct_remark_flow_steps_7d", F.lit(0.0))
         .withColumn("has_user_remark_7d", F.lit(0))
+        .withColumn("first_user_remark_delay_hours_7d", F.lit(None).cast("double"))
         .withColumn("num_risk_remarks_7d", F.lit(0.0))
         .withColumn("has_risk_remark_7d", F.lit(0))
         .withColumn("num_fraud_remarks_7d", F.lit(0.0))
@@ -794,70 +1037,154 @@ else:
         .withColumn("has_exclusion_remark_7d", F.lit(0))
         .withColumn("num_lock_remarks_7d", F.lit(0.0))
         .withColumn("has_lock_remark_7d", F.lit(0))
+        .withColumn("num_remark_account_created_7d", F.lit(0.0))
+        .withColumn("has_remark_account_created_7d", F.lit(0))
+        .withColumn("num_remark_address_added_7d", F.lit(0.0))
+        .withColumn("has_remark_address_added_7d", F.lit(0))
+        .withColumn("num_remark_address_changed_7d", F.lit(0.0))
+        .withColumn("has_remark_address_changed_7d", F.lit(0))
+        .withColumn("num_remark_email_added_7d", F.lit(0.0))
+        .withColumn("has_remark_email_added_7d", F.lit(0))
+        .withColumn("num_remark_email_changed_7d", F.lit(0.0))
+        .withColumn("has_remark_email_changed_7d", F.lit(0))
+        .withColumn("num_remark_phone_changed_7d", F.lit(0.0))
+        .withColumn("has_remark_phone_changed_7d", F.lit(0))
+        .withColumn("num_remark_password_changed_7d", F.lit(0.0))
+        .withColumn("has_remark_password_changed_7d", F.lit(0))
+        .withColumn("num_remark_ekyc_verified_7d", F.lit(0.0))
+        .withColumn("has_remark_ekyc_verified_7d", F.lit(0))
+        .withColumn("num_remark_ekyc_failed_7d", F.lit(0.0))
+        .withColumn("has_remark_ekyc_failed_7d", F.lit(0))
+        .withColumn("num_remark_kyc_verified_7d", F.lit(0.0))
+        .withColumn("has_remark_kyc_verified_7d", F.lit(0))
+        .withColumn("num_remark_kyc_failed_7d", F.lit(0.0))
+        .withColumn("has_remark_kyc_failed_7d", F.lit(0))
+        .withColumn("num_remark_system_face_verified_7d", F.lit(0.0))
+        .withColumn("has_remark_system_face_verified_7d", F.lit(0))
+        .withColumn("num_remark_system_face_failed_7d", F.lit(0.0))
+        .withColumn("has_remark_system_face_failed_7d", F.lit(0))
+        .withColumn("num_remark_self_exclusion_7d", F.lit(0.0))
+        .withColumn("has_remark_self_exclusion_7d", F.lit(0))
+        .withColumn("num_remark_deposit_limit_7d", F.lit(0.0))
+        .withColumn("has_remark_deposit_limit_7d", F.lit(0))
+        .withColumn("num_remark_customer_request_7d", F.lit(0.0))
+        .withColumn("has_remark_customer_request_7d", F.lit(0))
+        .withColumn("first_remark_address_added_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("first_remark_ekyc_verified_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("first_remark_ekyc_failed_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("first_remark_customer_request_delay_hours_7d", F.lit(None).cast("double"))
+        .withColumn("first_remark_lock_delay_hours_7d", F.lit(None).cast("double"))
     )
+    for flow_step in remark_flow_step_ohe_values:
+        remark_features = (
+            remark_features
+            .withColumn(f"num_remark_flow_step_{flow_step}_7d", F.lit(0.0))
+            .withColumn(f"has_remark_flow_step_{flow_step}_7d", F.lit(0))
+        )
 
 # COMMAND ----------
 
-# Wallet frozen/account-status features in first days after registration
-wallet_ts_col = _pick_col(
-    wallets,
-    ["updated_time_uae", "updated_time", "created_time_uae", "created_time", "latest_effective_time_uae", "latest_effective_time"],
-    "wallet timestamp",
-    required=False,
-)
-wallet_frozen_col = _pick_col(wallets, ["frozen"], "wallet frozen", required=False)
+# Wallet transaction behavior before first successful deposit
+# (or until registration + 30d for users without successful deposit)
+wallet_trans_types = [
+    "betrecharge",
+    "decrease",
+    "prize",
+    "prizeevent",
+    "eventrecharge",
+    "eventdecrease",
+    "decreaserollback",
+    "decreasemerchant",
+]
 
-if wallet_ts_col:
-    wallet_base = (
-        wallets
-        .select(
-            F.col("user_id").cast("long").alias("user_id"),
-            F.col("source_system").alias("source_system"),
-            _safe_to_timestamp(wallet_ts_col).alias("wallet_event_ts"),
-            F.col(wallet_frozen_col).cast("double").alias("wallet_frozen") if wallet_frozen_col else F.lit(None).cast("double").alias("wallet_frozen"),
-        )
-        .filter(F.col("wallet_event_ts").isNotNull())
-    )
+wallet_tx_defaults = {
+    "num_wallet_txn_rows_predeposit_30d": 0.0,
+}
+for _trans_type in wallet_trans_types:
+    _token = _sanitize_source_system_token(_trans_type)
+    wallet_tx_defaults[f"num_wallet_txn_trans_type_{_token}_predeposit_30d"] = 0.0
+    wallet_tx_defaults[f"has_wallet_txn_trans_type_{_token}_predeposit_30d"] = 0
 
-    wallet_features = (
-        registration_base.alias("r")
-        .join(
-            wallet_base.alias("w"),
-            (F.col("r.user_id") == F.col("w.user_id"))
-            & (F.col("r.source_system") == F.col("w.source_system"))
-            & (F.col("w.wallet_event_ts") >= F.col("r.registration_ts"))
-            & (F.col("w.wallet_event_ts") < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(WALLET_WINDOW_DAYS)} DAYS"))),
-            "left",
-        )
-        .groupBy("r.user_id", "r.source_system")
-        .agg(
-            F.count("w.wallet_event_ts").cast("double").alias("num_wallet_events_7d"),
-            F.max(F.when(F.col("w.wallet_event_ts").isNotNull(), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_wallet_event_7d"),
-            F.max(F.coalesce(F.col("w.wallet_frozen"), F.lit(0.0))).cast("double").alias("wallet_frozen_max_7d"),
-            F.avg(F.coalesce(F.col("w.wallet_frozen"), F.lit(0.0))).cast("double").alias("wallet_frozen_avg_7d"),
-            F.min(
-                F.when(
-                    F.col("w.wallet_event_ts").isNotNull(),
-                    (F.col("w.wallet_event_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
-                )
-            ).cast("double").alias("first_wallet_event_delay_hours_7d"),
-        )
-        .withColumn(
-            "has_wallet_frozen_positive_7d",
-            F.when(F.col("wallet_frozen_max_7d") > 0, F.lit(1)).otherwise(F.lit(0)),
-        )
+if wallet_transactions is not None:
+    wtx_ts_col = _pick_col(
+        wallet_transactions,
+        ["created_time_uae", "created_time", "updated_time_uae", "updated_time"],
+        "wallet transaction timestamp",
+        required=False,
     )
+    wtx_user_col = _pick_col(wallet_transactions, ["user_id"], "wallet transaction user_id", required=False)
+    wtx_source_col = _pick_col(wallet_transactions, ["source_system"], "wallet transaction source_system", required=False)
+    wtx_trans_type_col = _pick_col(wallet_transactions, ["trans_type"], "wallet transaction trans_type", required=False)
+
+    if wtx_ts_col and wtx_user_col and wtx_source_col and wtx_trans_type_col:
+        wallet_tx_base = (
+            wallet_transactions
+            .select(
+                F.col(wtx_user_col).cast("long").alias("user_id"),
+                F.col(wtx_source_col).alias("source_system"),
+                _safe_to_timestamp(wtx_ts_col).alias("wallet_tx_ts"),
+                F.lower(F.trim(F.coalesce(F.col(wtx_trans_type_col).cast("string"), F.lit("")))).alias("wallet_tx_trans_type"),
+            )
+            .filter(F.col("wallet_tx_ts").isNotNull())
+            .filter(F.col("wallet_tx_trans_type").isin(wallet_trans_types))
+        )
+
+        wallet_tx_joined = (
+            registration_with_predeposit_cutoff.alias("r")
+            .join(
+                wallet_tx_base.alias("w"),
+                (F.col("r.user_id") == F.col("w.user_id"))
+                & (F.col("r.source_system") == F.col("w.source_system"))
+                & (F.col("w.wallet_tx_ts") >= F.col("r.registration_ts"))
+                & (F.col("w.wallet_tx_ts") < F.col("r.predeposit_cutoff_ts")),
+                "left",
+            )
+        )
+
+        wallet_feature_aggs = [
+            F.count("w.wallet_tx_ts").cast("double").alias("num_wallet_txn_rows_predeposit_30d"),
+        ]
+
+        for _trans_type in wallet_trans_types:
+            _token = _sanitize_source_system_token(_trans_type)
+            wallet_feature_aggs.append(
+                F.sum(
+                    F.when(F.col("w.wallet_tx_trans_type") == F.lit(_trans_type), F.lit(1)).otherwise(F.lit(0))
+                ).cast("double").alias(f"num_wallet_txn_trans_type_{_token}_predeposit_30d")
+            )
+            wallet_feature_aggs.append(
+                F.max(
+                    F.when(F.col("w.wallet_tx_trans_type") == F.lit(_trans_type), F.lit(1)).otherwise(F.lit(0))
+                ).cast("int").alias(f"has_wallet_txn_trans_type_{_token}_predeposit_30d")
+            )
+
+        wallet_features = (
+            wallet_tx_joined
+            .groupBy("r.user_id", "r.source_system")
+            .agg(*wallet_feature_aggs)
+        )
+    else:
+        wallet_features = registration_base.select("user_id", "source_system")
+        for _feature_name, _feature_default in wallet_tx_defaults.items():
+            if _feature_default is None:
+                wallet_features = wallet_features.withColumn(_feature_name, F.lit(None).cast("double"))
+            elif isinstance(_feature_default, float):
+                wallet_features = wallet_features.withColumn(_feature_name, F.lit(_feature_default).cast("double"))
+            elif isinstance(_feature_default, int):
+                wallet_features = wallet_features.withColumn(_feature_name, F.lit(_feature_default).cast("int"))
+            else:
+                wallet_features = wallet_features.withColumn(_feature_name, F.lit(_feature_default))
 else:
-    wallet_features = (
-        registration_base
-        .select("user_id", "source_system")
-        .withColumn("num_wallet_events_7d", F.lit(0.0))
-        .withColumn("has_wallet_event_7d", F.lit(0))
-        .withColumn("wallet_frozen_max_7d", F.lit(0.0))
-        .withColumn("wallet_frozen_avg_7d", F.lit(0.0))
-        .withColumn("first_wallet_event_delay_hours_7d", F.lit(None).cast("double"))
-        .withColumn("has_wallet_frozen_positive_7d", F.lit(0))
-    )
+    wallet_features = registration_base.select("user_id", "source_system")
+    for _feature_name, _feature_default in wallet_tx_defaults.items():
+        if _feature_default is None:
+            wallet_features = wallet_features.withColumn(_feature_name, F.lit(None).cast("double"))
+        elif isinstance(_feature_default, float):
+            wallet_features = wallet_features.withColumn(_feature_name, F.lit(_feature_default).cast("double"))
+        elif isinstance(_feature_default, int):
+            wallet_features = wallet_features.withColumn(_feature_name, F.lit(_feature_default).cast("int"))
+        else:
+            wallet_features = wallet_features.withColumn(_feature_name, F.lit(_feature_default))
 
 # COMMAND ----------
 
@@ -1032,6 +1359,7 @@ features = (
             "has_verification_fail_reason_7d": 0,
             "num_user_remarks_7d": 0.0,
             "num_distinct_remark_operation_types_7d": 0.0,
+            "num_distinct_remark_flow_steps_7d": 0.0,
             "has_user_remark_7d": 0,
             "num_risk_remarks_7d": 0.0,
             "has_risk_remark_7d": 0,
@@ -1041,11 +1369,55 @@ features = (
             "has_exclusion_remark_7d": 0,
             "num_lock_remarks_7d": 0.0,
             "has_lock_remark_7d": 0,
-            "num_wallet_events_7d": 0.0,
-            "has_wallet_event_7d": 0,
-            "wallet_frozen_max_7d": 0.0,
-            "wallet_frozen_avg_7d": 0.0,
-            "has_wallet_frozen_positive_7d": 0,
+            "num_remark_account_created_7d": 0.0,
+            "has_remark_account_created_7d": 0,
+            "num_remark_address_added_7d": 0.0,
+            "has_remark_address_added_7d": 0,
+            "num_remark_address_changed_7d": 0.0,
+            "has_remark_address_changed_7d": 0,
+            "num_remark_email_added_7d": 0.0,
+            "has_remark_email_added_7d": 0,
+            "num_remark_email_changed_7d": 0.0,
+            "has_remark_email_changed_7d": 0,
+            "num_remark_phone_changed_7d": 0.0,
+            "has_remark_phone_changed_7d": 0,
+            "num_remark_password_changed_7d": 0.0,
+            "has_remark_password_changed_7d": 0,
+            "num_remark_ekyc_verified_7d": 0.0,
+            "has_remark_ekyc_verified_7d": 0,
+            "num_remark_ekyc_failed_7d": 0.0,
+            "has_remark_ekyc_failed_7d": 0,
+            "num_remark_kyc_verified_7d": 0.0,
+            "has_remark_kyc_verified_7d": 0,
+            "num_remark_kyc_failed_7d": 0.0,
+            "has_remark_kyc_failed_7d": 0,
+            "num_remark_system_face_verified_7d": 0.0,
+            "has_remark_system_face_verified_7d": 0,
+            "num_remark_system_face_failed_7d": 0.0,
+            "has_remark_system_face_failed_7d": 0,
+            "num_remark_self_exclusion_7d": 0.0,
+            "has_remark_self_exclusion_7d": 0,
+            "num_remark_deposit_limit_7d": 0.0,
+            "has_remark_deposit_limit_7d": 0,
+            "num_remark_customer_request_7d": 0.0,
+            "has_remark_customer_request_7d": 0,
+            "num_wallet_txn_rows_predeposit_30d": 0.0,
+            "num_wallet_txn_trans_type_betrecharge_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_betrecharge_predeposit_30d": 0,
+            "num_wallet_txn_trans_type_decrease_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_decrease_predeposit_30d": 0,
+            "num_wallet_txn_trans_type_prize_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_prize_predeposit_30d": 0,
+            "num_wallet_txn_trans_type_prizeevent_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_prizeevent_predeposit_30d": 0,
+            "num_wallet_txn_trans_type_eventrecharge_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_eventrecharge_predeposit_30d": 0,
+            "num_wallet_txn_trans_type_eventdecrease_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_eventdecrease_predeposit_30d": 0,
+            "num_wallet_txn_trans_type_decreaserollback_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_decreaserollback_predeposit_30d": 0,
+            "num_wallet_txn_trans_type_decreasemerchant_predeposit_30d": 0.0,
+            "has_wallet_txn_trans_type_decreasemerchant_predeposit_30d": 0,
             "num_deposit_attempts_30d": 0.0,
             "num_deposit_success_30d": 0.0,
             "num_deposit_failure_30d": 0.0,

@@ -48,6 +48,7 @@ SILVER_USER_VERIFICATION = f"{READ_SILVER_DB}.user.user_verification"
 SILVER_USER_REMARK = f"{READ_SILVER_DB}.user.user_remark"
 SILVER_WALLET_DEPOSIT = f"{READ_SILVER_DB}.wallet.deposit"
 SILVER_WALLET_WALLET = f"{READ_SILVER_DB}.wallet.wallet"
+SILVER_WALLET_TRANSACTION_ORDER = f"{READ_SILVER_DB}.wallet.wallet_transaction_order"
 
 # Cohort + modeling windows
 COHORT_LOOKBACK_MONTHS = 12
@@ -100,6 +101,7 @@ EXCLUDED_MODEL_FEATURES = {
     "user_type_id",
     "profile_platform_id",
     "profile_os_type_id",
+    "country_id",
     "resident_country_id",
     "distributor_status_id",
     "enable_status_id",
@@ -124,6 +126,46 @@ EXCLUDED_MODEL_FEATURES = {
     "num_non_test_groups",
     "num_active_login_methods",
     "num_third_party_login_methods",
+    # Legacy wallet features removed from feature engineering (kept here to avoid
+    # stale historical columns being picked during training from merged schemas).
+    "num_wallet_events_7d",
+    "has_wallet_event_7d",
+    "wallet_frozen_max_7d",
+    "wallet_frozen_avg_7d",
+    "first_wallet_event_delay_hours_7d",
+    "has_wallet_frozen_positive_7d",
+    # Wallet transaction types too sparse to be useful (near-all zeros).
+    "num_wallet_txn_trans_type_eventdecrease_predeposit_30d",
+    "has_wallet_txn_trans_type_eventdecrease_predeposit_30d",
+    "num_wallet_txn_trans_type_eventrecharge_predeposit_30d",
+    "has_wallet_txn_trans_type_eventrecharge_predeposit_30d",
+    "num_wallet_txn_trans_type_decreaserollback_predeposit_30d",
+    "has_wallet_txn_trans_type_decreaserollback_predeposit_30d",
+    "num_wallet_txn_trans_type_decreasemerchant_predeposit_30d",
+    "has_wallet_txn_trans_type_decreasemerchant_predeposit_30d",
+    "num_wallet_txn_trans_type_prizeevent_predeposit_30d",
+    "has_wallet_txn_trans_type_prizeevent_predeposit_30d",
+    "num_wallet_txn_trans_type_decrease_predeposit_30d",
+    "has_wallet_txn_trans_type_decrease_predeposit_30d",
+    "num_wallet_txn_trans_type_prize_predeposit_30d",
+    "has_wallet_txn_trans_type_prize_predeposit_30d",
+    # Remark features with constant value (no signal).
+    "has_user_remark_7d",
+    "has_remark_account_created_7d",
+    "has_remark_flow_step_account_created_7d",
+    "num_remark_account_created_7d",
+    "num_remark_flow_step_account_created_7d",
+    # High-missing remark delay features.
+    "first_remark_customer_request_delay_hours_7d",
+    "first_remark_ekyc_failed_delay_hours_7d",
+    "first_remark_lock_delay_hours_7d",
+    # Constant/no-signal features from current exploration.
+    "has_kyc_attempt_7d",
+    "has_sign_id_card_verification_7d",
+    "has_verification_fail_reason_7d",
+    "login_status_id",
+    "num_distinct_id_card_types_7d",
+    "num_distinct_verification_ip_7d",
 }
 
 

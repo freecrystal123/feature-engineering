@@ -133,6 +133,12 @@ def _compute_shap_global_importance(model_pipeline, X_frame: pd.DataFrame):
 
     X_sample = X_frame.sample(n=shap_sample_size, random_state=int(DEFAULT_RANDOM_SEED))
     X_imputed = imputer.transform(X_sample)
+    transformed_feature_names = list(X_sample.columns)
+    if hasattr(imputer, "get_feature_names_out"):
+        try:
+            transformed_feature_names = list(imputer.get_feature_names_out(X_sample.columns))
+        except Exception:
+            transformed_feature_names = list(X_sample.columns)
 
     explainer = shap.TreeExplainer(clf)
     shap_values = explainer.shap_values(X_imputed)
@@ -146,9 +152,17 @@ def _compute_shap_global_importance(model_pipeline, X_frame: pd.DataFrame):
         else:
             shap_matrix = arr
 
+    # Defensive alignment: some sklearn versions can drop all-missing columns in
+    # SimpleImputer, changing transformed width vs original feature list.
+    n_shap_cols = int(shap_matrix.shape[1])
+    if len(transformed_feature_names) != n_shap_cols:
+        transformed_feature_names = transformed_feature_names[:n_shap_cols]
+        if len(transformed_feature_names) < n_shap_cols:
+            transformed_feature_names.extend([f"feature_{i}" for i in range(len(transformed_feature_names), n_shap_cols)])
+
     shap_df = pd.DataFrame(
         {
-            "feature_name": list(X_frame.columns),
+            "feature_name": transformed_feature_names,
             "mean_abs_shap": np.abs(shap_matrix).mean(axis=0),
             "mean_shap": np.mean(shap_matrix, axis=0),
             "sample_size": int(shap_sample_size),
@@ -199,6 +213,30 @@ def train_and_register(analysis: str):
         )
     if train_pdf["label_deposit_success_30d"].nunique() < 2:
         raise ValueError("Training label has a single class after minimum observation window filtering.")
+
+    # Drop features that are fully null in this training extract (common when old
+    # columns remain in merged table schemas but are no longer populated).
+    non_empty_feature_cols = []
+    dropped_all_missing = []
+    for col in feature_cols:
+        series = pd.to_numeric(train_pdf[col], errors="coerce")
+        if series.notna().any():
+            non_empty_feature_cols.append(col)
+        else:
+            dropped_all_missing.append(col)
+    feature_cols = non_empty_feature_cols
+
+    if dropped_all_missing:
+        print(
+            json.dumps(
+                {
+                    "dropped_all_missing_features": dropped_all_missing,
+                    "n_dropped": len(dropped_all_missing),
+                }
+            )
+        )
+    if not feature_cols:
+        raise ValueError("No usable feature columns after dropping all-missing features.")
 
     train_split_pdf, test_split_pdf, split_strategy, holdout_months = _build_train_test_split(train_pdf)
 
