@@ -822,6 +822,141 @@ else:
 
 # COMMAND ----------
 
+# User age and nationality from verified eKYC profile (not limited to 7d window)
+verification_nationality_candidates = ["country_region", "nationality", "country", "country_name"]
+verification_nationality_cols = [c for c in verification_nationality_candidates if c in verification.columns]
+
+customer_nationality_top_values = []
+for _value in CUSTOMER_NATIONALITY_TOP_COUNTRIES_GLOBAL:
+    _norm = str(_value).strip().upper()
+    if _norm and _norm != "UNKNOWN" and _norm not in customer_nationality_top_values:
+        customer_nationality_top_values.append(_norm)
+
+customer_nationality_ohe_cols = [
+    f"customer_nationality_is_{_sanitize_source_system_token(_value)}"
+    for _value in customer_nationality_top_values
+]
+customer_nationality_unknown_col = "customer_nationality_is_unknown"
+customer_nationality_other_col = "customer_nationality_is_other"
+
+
+def _with_customer_nationality_ohe(df):
+    out = df
+    for _value, _col_name in zip(customer_nationality_top_values, customer_nationality_ohe_cols):
+        out = out.withColumn(
+            _col_name,
+            F.when(F.col("customer_nationality") == F.lit(_value), F.lit(1)).otherwise(F.lit(0)).cast("int"),
+        )
+
+    out = out.withColumn(
+        customer_nationality_unknown_col,
+        F.when(F.col("customer_nationality") == F.lit("UNKNOWN"), F.lit(1)).otherwise(F.lit(0)).cast("int"),
+    )
+
+    if customer_nationality_top_values:
+        out = out.withColumn(
+            customer_nationality_other_col,
+            F.when(
+                (~F.col("customer_nationality").isin(*customer_nationality_top_values))
+                & (F.col("customer_nationality") != F.lit("UNKNOWN")),
+                F.lit(1),
+            ).otherwise(F.lit(0)).cast("int"),
+        )
+    else:
+        out = out.withColumn(
+            customer_nationality_other_col,
+            F.when(F.col("customer_nationality") != F.lit("UNKNOWN"), F.lit(1)).otherwise(F.lit(0)).cast("int"),
+        )
+
+    return out
+
+demographic_features = (
+    registration_base
+    .select("user_id", "source_system")
+    .withColumn("customer_age_years", F.lit(None).cast("double"))
+    .withColumn("customer_nationality", F.lit("UNKNOWN"))
+)
+demographic_features = _with_customer_nationality_ohe(demographic_features)
+
+if verified_status_col and verify_type_col and (birth_date_v_col or verification_nationality_cols):
+    nationality_exprs = []
+    for _col_name in verification_nationality_cols:
+        _raw = F.trim(F.col(_col_name).cast("string"))
+        nationality_exprs.append(
+            F.when(_raw.isNotNull() & (F.length(_raw) > 0), F.upper(_raw))
+        )
+    nationality_raw_expr = (
+        F.coalesce(*nationality_exprs)
+        if nationality_exprs
+        else F.lit(None).cast("string")
+    )
+
+    verification_demographic_base = (
+        verification
+        .select(
+            F.col("user_id").cast("long").alias("user_id"),
+            F.col("source_system").alias("source_system"),
+            _safe_to_timestamp(verification_ts_col).alias("verification_ts")
+            if verification_ts_col
+            else F.lit(None).cast("timestamp").alias("verification_ts"),
+            _normalize_status_int(F.col(verified_status_col).cast("string")).alias("verified_status_id"),
+            _normalize_status_int(F.col(verify_type_col).cast("string")).alias("verify_type_id"),
+            _safe_to_date(birth_date_v_col).alias("birth_date_verification")
+            if birth_date_v_col
+            else F.lit(None).cast("date").alias("birth_date_verification"),
+            nationality_raw_expr.alias("nationality_raw"),
+        )
+        .filter((F.col("verified_status_id") == F.lit(3)) & (F.col("verify_type_id") == F.lit(3)))
+    )
+
+    verification_demographic_partition = Window.partitionBy("user_id", "source_system").orderBy(
+        F.col("verification_ts").desc_nulls_last()
+    )
+
+    verification_demographic_latest = (
+        verification_demographic_base
+        .withColumn("_rn", F.row_number().over(verification_demographic_partition))
+        .filter(F.col("_rn") == 1)
+        .select(
+            "user_id",
+            "source_system",
+            F.when(
+                F.col("birth_date_verification").isNotNull(),
+                F.floor(
+                    F.months_between(F.current_date(), F.col("birth_date_verification")) / F.lit(12.0)
+                ).cast("double"),
+            ).otherwise(F.lit(None).cast("double")).alias("customer_age_years"),
+            F.when(
+                F.col("nationality_raw").isNull() | (F.length(F.col("nationality_raw")) == 0),
+                F.lit("UNKNOWN"),
+            ).otherwise(F.col("nationality_raw")).alias("customer_nationality"),
+        )
+        .withColumn(
+            "customer_age_years",
+            F.when(
+                (F.col("customer_age_years") >= F.lit(0.0))
+                & (F.col("customer_age_years") <= F.lit(110.0)),
+                F.col("customer_age_years"),
+            ).otherwise(F.lit(None).cast("double")),
+        )
+    )
+
+    demographic_features = (
+        registration_base
+        .select("user_id", "source_system")
+        .join(verification_demographic_latest, on=["user_id", "source_system"], how="left")
+        .withColumn(
+            "customer_nationality",
+            F.when(
+                F.col("customer_nationality").isNull() | (F.length(F.trim(F.col("customer_nationality"))) == 0),
+                F.lit("UNKNOWN"),
+            ).otherwise(F.upper(F.trim(F.col("customer_nationality")))),
+        )
+    )
+    demographic_features = _with_customer_nationality_ohe(demographic_features)
+
+# COMMAND ----------
+
 # User remark features in first days after registration
 remark_ts_col = _pick_col(
     remarks,
@@ -1269,6 +1404,7 @@ deposit_funnel_features = (
 features = (
     registration_base.alias("r")
     .join(profile_latest.alias("p"), on=["user_id", "source_system"], how="left")
+    .join(demographic_features.alias("dv"), on=["user_id", "source_system"], how="left")
     .join(group_features.alias("g"), on=["user_id", "source_system"], how="left")
     .join(login_method_features.alias("m"), on=["user_id", "source_system"], how="left")
     .join(early_login_features.alias("l"), on=["user_id", "source_system"], how="left")
@@ -1301,6 +1437,11 @@ features = (
             "country_id": 0.0,
             "nation_id": 0.0,
             "resident_country_id": 0.0,
+            "customer_age_years": 0.0,
+            "customer_nationality": "UNKNOWN",
+            **{_col_name: 0 for _col_name in customer_nationality_ohe_cols},
+            customer_nationality_unknown_col: 1,
+            customer_nationality_other_col: 0,
             "registration_platform_id": 0.0,
             "registered_by_mobile": 0,
             "registered_by_desktop": 0,

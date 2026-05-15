@@ -59,6 +59,30 @@ REMARK_WINDOW_DAYS = 7
 WALLET_WINDOW_DAYS = 7
 SOURCE_SYSTEM_TOP_K = 10
 VERIFICATION_COUNTRY_TOP_K = 10
+# Fixed global list for nationality one-hot encoding in model features.
+# Values are normalized to uppercase in feature engineering.
+CUSTOMER_NATIONALITY_TOP_COUNTRIES_GLOBAL = [
+    "INDIA",
+    "PHILIPPINES",
+    "PAKISTAN",
+    "NEPAL",
+    "UNITED ARAB EMIRATES",
+    "BANGLADESH",
+    "SRI LANKA",
+    "EGYPT",
+    "SYRIA",
+    "UNITED KINGDOM",
+    "LEBANON",
+    "IRAN",
+    "UNITED STATES",
+    "MYANMAR",
+    "JORDAN",
+    "MOROCCO",
+    "ETHIOPIA",
+    "SUDAN",
+    "SOUTH AFRICA",
+    "GHANA",
+]
 
 # Model defaults
 DEFAULT_CANDIDATE_ALIAS = "challenger"
@@ -77,6 +101,8 @@ DEMOGRAPHIC_CLASSIC_FEATURES = [
     "registered_by_mobile",
     "registered_by_desktop",
     "days_since_registration",
+    "customer_age_years",
+    "customer_nationality",
 ]
 
 # Keep calendar and device flags as exact values in demographic segmentation
@@ -88,6 +114,7 @@ DEMOGRAPHIC_FORCE_DISCRETE_FEATURES = {
     "registration_weekend_flag",
     "registered_by_mobile",
     "registered_by_desktop",
+    "customer_nationality",
 }
 
 
@@ -103,6 +130,8 @@ EXCLUDED_MODEL_FEATURES = {
     "profile_os_type_id",
     "country_id",
     "resident_country_id",
+    # Demographic-only (kept for report diagnostics; not for model fitting).
+    "customer_nationality",
     "distributor_status_id",
     "enable_status_id",
     "has_sign_login_name",

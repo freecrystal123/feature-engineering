@@ -234,9 +234,10 @@ for analysis in get_analyses_to_run():
         )
 
     shap_selected_features = [str(r["feature_name"]) for r in shap_top]
+    available_columns = set(feat_df.columns)
     classic_features = [
         f for f in DEMOGRAPHIC_CLASSIC_FEATURES
-        if f in feature_candidates
+        if f in available_columns
     ]
     selected_features = []
     for feature_name in shap_selected_features + classic_features:
@@ -255,6 +256,7 @@ for analysis in get_analyses_to_run():
 
     base_cols = ["unique_user_id", "label_deposit_success_30d"] + selected_features
     base_df = feat_df.select(*[c for c in base_cols if c in feat_df.columns])
+    feature_dtype_lookup = {f.name: f.dataType.typeName() for f in base_df.schema.fields}
     total_users = int(base_df.count())
 
     summary_rows = []
@@ -266,18 +268,34 @@ for analysis in get_analyses_to_run():
             F.col("label_deposit_success_30d").cast("double").alias("label"),
             F.col(feature_name).alias(feature_name),
         )
+        is_numeric_feature = _is_numeric_dtype(feature_dtype_lookup.get(feature_name, ""))
+
+        summary_agg_exprs = [
+            F.count("*").alias("n_users"),
+            F.sum(F.col("label")).alias("converted_users"),
+            F.sum(F.when(F.col(feature_name).isNull(), F.lit(1)).otherwise(F.lit(0))).alias("missing_users"),
+            F.approx_count_distinct(F.col(feature_name)).alias("approx_unique"),
+        ]
+        if is_numeric_feature:
+            summary_agg_exprs.extend(
+                [
+                    F.avg(F.col(feature_name).cast("double")).alias("feature_mean"),
+                    F.expr(f"percentile_approx(CAST(`{feature_name}` AS DOUBLE), 0.5)").alias("feature_median"),
+                    F.stddev_samp(F.col(feature_name).cast("double")).alias("feature_std"),
+                ]
+            )
+        else:
+            summary_agg_exprs.extend(
+                [
+                    F.lit(None).cast("double").alias("feature_mean"),
+                    F.lit(None).cast("double").alias("feature_median"),
+                    F.lit(None).cast("double").alias("feature_std"),
+                ]
+            )
 
         summary_metrics = (
             feature_df
-            .agg(
-                F.count("*").alias("n_users"),
-                F.sum(F.col("label")).alias("converted_users"),
-                F.sum(F.when(F.col(feature_name).isNull(), F.lit(1)).otherwise(F.lit(0))).alias("missing_users"),
-                F.approx_count_distinct(F.col(feature_name)).alias("approx_unique"),
-                F.avg(F.col(feature_name).cast("double")).alias("feature_mean"),
-                F.expr(f"percentile_approx(CAST(`{feature_name}` AS DOUBLE), 0.5)").alias("feature_median"),
-                F.stddev_samp(F.col(feature_name).cast("double")).alias("feature_std"),
-            )
+            .agg(*summary_agg_exprs)
             .collect()[0]
         )
 

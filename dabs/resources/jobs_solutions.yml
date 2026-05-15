@@ -140,6 +140,15 @@ resources:
             base_parameters:
               analysis_id: all
           existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: demographic_report_dataset
+          depends_on:
+            - task_key: report_dataset
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/06_demographic_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
       queue:
         enabled: true
 
@@ -177,6 +186,15 @@ resources:
             - task_key: model_prediction
           notebook_task:
             notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: all
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: demographic_report_dataset
+          depends_on:
+            - task_key: report_dataset
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/conversion_funnel_deposit/06_demographic_report
             source: WORKSPACE
             base_parameters:
               analysis_id: all

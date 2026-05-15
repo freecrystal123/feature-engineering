@@ -33,6 +33,8 @@ CLASSIC_FEATURES = [
     "registration_weekend_flag",
     "registration_device",
     "days_since_registration",
+    "customer_age_years",
+    "customer_nationality",
 ]
 
 FEATURE_NAME_ALIASES = {
@@ -42,6 +44,8 @@ FEATURE_NAME_ALIASES = {
     "registration_weekend_flag": "Weekend vs Weekday",
     "registration_device": "Registration Device",
     "days_since_registration": "Days Since Registration",
+    "customer_age_years": "Customer Age (Years)",
+    "customer_nationality": "Customer Nationality",
     "registered_by_mobile": "Registration Device",
     "registered_by_desktop": "Registration Device",
 }
@@ -242,6 +246,8 @@ def _classic_segment_label(feature_name: str, raw_value: str) -> str:
         return "Mobile" if ivalue == 1 else "Computer"
     if feature_name in {"registration_hour", "registration_day_of_month", "days_since_registration"}:
         return str(ivalue)
+    if feature_name == "customer_nationality" and value == "UNKNOWN":
+        return "Unknown"
     return str(ivalue)
 
 
