@@ -17,7 +17,7 @@ REPORT_META = {
     "description": "Monthly register-to-deposit funnel with model evaluation and SHAP explainability.",
 }
 
-FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_1")
+FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_2")
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.]+$")
 
 ANALYSIS_NAMES = {
@@ -40,7 +40,7 @@ def _analysis_name() -> str:
     override = str(os.getenv("FUNNEL_ANALYSIS_NAME", "")).strip()
     if override:
         return override
-    return ANALYSIS_NAMES.get(FUNNEL_ANALYSIS, "register_to_deposit_30d")
+    return ANALYSIS_NAMES.get(FUNNEL_ANALYSIS, "register_to_deposit_30d_truewin")
 
 
 def _analysis_options() -> list[str]:

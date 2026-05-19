@@ -17,7 +17,7 @@ REPORT_META = {
     "description": "Side-by-side demographic characteristics for converted vs non-converted users.",
 }
 
-FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_1")
+FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_2")
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.]+$")
 
 ANALYSIS_NAMES = {
@@ -74,7 +74,7 @@ def _analysis_name() -> str:
     override = str(os.getenv("FUNNEL_ANALYSIS_NAME", "")).strip()
     if override:
         return override
-    return ANALYSIS_NAMES.get(FUNNEL_ANALYSIS, "register_to_deposit_30d")
+    return ANALYSIS_NAMES.get(FUNNEL_ANALYSIS, "register_to_deposit_30d_truewin")
 
 
 def _analysis_options() -> list[str]:
@@ -357,28 +357,40 @@ def _render_feature_detail_panel(segments_df: pd.DataFrame, feature_name: str) -
 
     with left_col:
         st.markdown("###### Not Converted")
-        non_df = chart_df[["segment_label", "share_in_non_converted"]].rename(columns={"share_in_non_converted": "share"})
         non_chart = (
-            alt.Chart(non_df)
+            alt.Chart(chart_df)
             .mark_bar()
             .encode(
                 x=alt.X("segment_label:N", sort=sort_order, title="Segment"),
-                y=alt.Y("share:Q", title="Share within not converted"),
-                tooltip=["segment_label", alt.Tooltip("share:Q", format=".2%")],
+                y=alt.Y("share_in_non_converted:Q", title="Share within not converted"),
+                tooltip=[
+                    "segment_label",
+                    alt.Tooltip("non_converted_users:Q", title="non_converted_users", format=",.0f"),
+                    alt.Tooltip("users:Q", title="segment_users", format=",.0f"),
+                    alt.Tooltip("share_in_non_converted:Q", title="share_within_non_converted", format=".2%"),
+                    alt.Tooltip("conversion_rate:Q", title="segment_conversion_rate", format=".2%"),
+                    alt.Tooltip("population_pct:Q", format=".2%"),
+                ],
             )
         )
         st.altair_chart(non_chart, use_container_width=True)
 
     with right_col:
         st.markdown("###### Converted")
-        conv_df = chart_df[["segment_label", "share_in_converted"]].rename(columns={"share_in_converted": "share"})
         conv_chart = (
-            alt.Chart(conv_df)
+            alt.Chart(chart_df)
             .mark_bar()
             .encode(
                 x=alt.X("segment_label:N", sort=sort_order, title="Segment"),
-                y=alt.Y("share:Q", title="Share within converted"),
-                tooltip=["segment_label", alt.Tooltip("share:Q", format=".2%")],
+                y=alt.Y("share_in_converted:Q", title="Share within converted"),
+                tooltip=[
+                    "segment_label",
+                    alt.Tooltip("converted_users:Q", title="converted_users", format=",.0f"),
+                    alt.Tooltip("users:Q", title="segment_users", format=",.0f"),
+                    alt.Tooltip("share_in_converted:Q", title="share_within_converted", format=".2%"),
+                    alt.Tooltip("conversion_rate:Q", title="segment_conversion_rate", format=".2%"),
+                    alt.Tooltip("population_pct:Q", format=".2%"),
+                ],
             )
         )
         st.altair_chart(conv_chart, use_container_width=True)
@@ -443,13 +455,8 @@ def _render_classic_feature_cards(segments_df: pd.DataFrame, features: list[str]
             continue
 
         row = _feature_summary_row(summary_df, feature_name)
-        total_users = float(fdf["users"].sum())
-        conv_users = float(fdf["converted_users"].sum())
-        conv_rate = (conv_users / total_users) if total_users > 0 else 0.0
-
         title = _display_feature_name(feature_name)
-        subtitle = f"n={_fmt_num(total_users)} | conversion={_fmt_pct(conv_rate)}"
-        with st.expander(f"{title}  |  {subtitle}", expanded=False):
+        with st.expander(title, expanded=False):
             if row is not None:
                 st.caption(
                     f"mean_abs_shap={_fmt_float(row.get('mean_abs_shap'))} | "
@@ -580,6 +587,23 @@ def render(context: dict | None = None) -> None:
         "Left side = not converted users, right side = converted users. "
         "Classical features are shown as detailed cards by feature."
     )
+
+    overall_n = None
+    overall_conv_rate = None
+    if not summary_df.empty:
+        try:
+            overall_n = int(pd.to_numeric(summary_df["n_users"], errors="coerce").dropna().max())
+        except Exception:
+            overall_n = None
+        try:
+            overall_conv_rate = float(pd.to_numeric(summary_df["conversion_rate"], errors="coerce").dropna().max())
+        except Exception:
+            overall_conv_rate = None
+    if overall_n is not None and overall_conv_rate is not None:
+        st.markdown(
+            f"- Overall cohort in this analysis: `n={_fmt_num(overall_n)}` | "
+            f"`conversion={_fmt_pct(overall_conv_rate)}`"
+        )
 
     available_features = set(summary_df["feature_name"].astype(str).tolist())
     classic_features: list[str] = []
