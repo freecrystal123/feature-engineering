@@ -163,6 +163,9 @@ EXCLUDED_MODEL_FEATURES = {
     "wallet_frozen_avg_7d",
     "first_wallet_event_delay_hours_7d",
     "has_wallet_frozen_positive_7d",
+    # Leakage guard: `betrecharge` is the deposit transaction itself.
+    "num_wallet_txn_trans_type_betrecharge_predeposit_30d",
+    "has_wallet_txn_trans_type_betrecharge_predeposit_30d",
     # Wallet transaction types too sparse to be useful (near-all zeros).
     "num_wallet_txn_trans_type_eventdecrease_predeposit_30d",
     "has_wallet_txn_trans_type_eventdecrease_predeposit_30d",

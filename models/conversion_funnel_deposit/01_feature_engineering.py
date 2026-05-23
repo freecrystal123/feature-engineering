@@ -1221,15 +1221,23 @@ else:
 
 # Wallet transaction behavior before first successful deposit
 # (or until registration + 30d for users without successful deposit)
+# IMPORTANT: `betrecharge` maps to the deposit transaction, so it is excluded
+# from wallet features to prevent target leakage.
 wallet_trans_types = [
-    "betrecharge",
+    "systembetincrease",
+    "bonusrecharge",
     "decrease",
     "prize",
+    "prizecard",
     "prizeevent",
+    "transferprizeincrease",
     "eventrecharge",
+    "systemprizeincrease",
+    "transferbetincrease",
     "eventdecrease",
     "decreaserollback",
     "decreasemerchant",
+    "withdrawreverted",
 ]
 
 wallet_tx_defaults = {
@@ -1542,23 +1550,7 @@ features = (
             "has_remark_deposit_limit_7d": 0,
             "num_remark_customer_request_7d": 0.0,
             "has_remark_customer_request_7d": 0,
-            "num_wallet_txn_rows_predeposit_30d": 0.0,
-            "num_wallet_txn_trans_type_betrecharge_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_betrecharge_predeposit_30d": 0,
-            "num_wallet_txn_trans_type_decrease_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_decrease_predeposit_30d": 0,
-            "num_wallet_txn_trans_type_prize_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_prize_predeposit_30d": 0,
-            "num_wallet_txn_trans_type_prizeevent_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_prizeevent_predeposit_30d": 0,
-            "num_wallet_txn_trans_type_eventrecharge_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_eventrecharge_predeposit_30d": 0,
-            "num_wallet_txn_trans_type_eventdecrease_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_eventdecrease_predeposit_30d": 0,
-            "num_wallet_txn_trans_type_decreaserollback_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_decreaserollback_predeposit_30d": 0,
-            "num_wallet_txn_trans_type_decreasemerchant_predeposit_30d": 0.0,
-            "has_wallet_txn_trans_type_decreasemerchant_predeposit_30d": 0,
+            **wallet_tx_defaults,
             "num_deposit_attempts_30d": 0.0,
             "num_deposit_success_30d": 0.0,
             "num_deposit_failure_30d": 0.0,
