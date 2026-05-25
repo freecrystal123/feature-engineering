@@ -132,6 +132,8 @@ EXCLUDED_MODEL_FEATURES = {
     "resident_country_id",
     # Demographic-only (kept for report diagnostics; not for model fitting).
     "customer_nationality",
+    # Potential leakage proxy: unknown nationality is strongly tied to failed/no eKYC.
+    "customer_nationality_is_unknown",
     "distributor_status_id",
     "enable_status_id",
     "has_sign_login_name",
