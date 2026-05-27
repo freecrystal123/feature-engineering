@@ -115,9 +115,23 @@ for analysis in get_analyses_to_run():
         shap_publish = {"current_table": None}
 
     if eval_df is not None:
+        eval_report_cols = [
+            "split_name",
+            "split_strategy",
+            "holdout_months",
+            "n_rows",
+            "positive_rate",
+            "accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "roc_auc",
+            "pr_auc",
+        ]
+        eval_payload = eval_df.select(*[c for c in eval_report_cols if c in eval_df.columns])
         eval_publish = publish_table(
             spark=spark,
-            df=eval_df.withColumn("created_at", F.current_timestamp()),
+            df=eval_payload.withColumn("created_at", F.current_timestamp()),
             table_base=f"{T_FUNNEL_REPORT_PREFIX}_eval_{analysis_name}",
             analysis_name=analysis_name,
             current_mode="view",

@@ -18,6 +18,7 @@ ANALYSIS_NAMES = {
     "analysis_1": "register_to_deposit_30d",
     "analysis_2": "register_to_deposit_30d_truewin",
     "analysis_3": "register_to_deposit_30d_igaming",
+    "analysis_4": "register_to_deposit_30d_truewin_no_ekyc",
 }
 
 # Per-analysis source_system filters applied in feature engineering publish step.
@@ -28,6 +29,30 @@ ANALYSIS_SOURCE_SYSTEM_FILTERS = {
     "analysis_1": {"include": None, "exclude": []},
     "analysis_2": {"include": ["TRUEWIN"], "exclude": []},
     "analysis_3": {"include": None, "exclude": ["LOTTERY"]},
+    "analysis_4": {"include": ["TRUEWIN"], "exclude": []},
+}
+
+# Per-analysis feature exclusions on top of EXCLUDED_MODEL_FEATURES.
+# Used to create controlled training variants without changing feature engineering.
+ANALYSIS_EXTRA_EXCLUDED_FEATURES = {
+    # Truewin variant without eKYC/KYC/verification step/status signals.
+    "analysis_4": set(),
+}
+
+ANALYSIS_EXTRA_EXCLUDED_PREFIXES = {
+    "analysis_4": tuple(),
+}
+
+ANALYSIS_EXTRA_EXCLUDED_SUBSTRINGS = {
+    "analysis_4": (
+        # Remove verification/eKYC/KYC related features.
+        "ekyc",
+        "kyc",
+        "verification",
+        "verify",
+        "id_card",
+        "birth_date",
+    ),
 }
 
 # Feature + output tables
@@ -203,7 +228,45 @@ EXCLUDED_MODEL_FEATURES = {
 }
 
 
-def get_funnel_feature_columns(table_df):
+def _resolve_analysis_key(*, analysis_id: str | None = None, analysis_name: str | None = None) -> str | None:
+    if analysis_id in ANALYSIS_NAMES:
+        return analysis_id
+    if analysis_name is not None:
+        for _k, _v in ANALYSIS_NAMES.items():
+            if _v == analysis_name:
+                return _k
+    return None
+
+
+def _analysis_specific_excluded_features(table_df, *, analysis_id: str | None = None, analysis_name: str | None = None) -> set[str]:
+    key = _resolve_analysis_key(analysis_id=analysis_id, analysis_name=analysis_name)
+    if key is None:
+        return set()
+
+    exact = set(ANALYSIS_EXTRA_EXCLUDED_FEATURES.get(key, set()))
+    prefixes = tuple(str(p).lower() for p in ANALYSIS_EXTRA_EXCLUDED_PREFIXES.get(key, tuple()))
+    substrings = tuple(str(s).lower() for s in ANALYSIS_EXTRA_EXCLUDED_SUBSTRINGS.get(key, tuple()))
+
+    if not exact and not prefixes and not substrings:
+        return set()
+
+    out = set()
+    for f in table_df.schema.fields:
+        name = f.name
+        lname = name.lower()
+        if name in exact:
+            out.add(name)
+            continue
+        if prefixes and any(lname.startswith(p) for p in prefixes):
+            out.add(name)
+            continue
+        if substrings and any(s in lname for s in substrings):
+            out.add(name)
+            continue
+    return out
+
+
+def get_funnel_feature_columns(table_df, *, analysis_id: str | None = None, analysis_name: str | None = None):
     metadata_cols = {"run_id", "run_ts", "ref_date", "analysis_name", "created_at"}
     key_cols = {"unique_user_id", "user_id", "source_system"}
     leak_cols = {
@@ -230,7 +293,12 @@ def get_funnel_feature_columns(table_df):
         "first_attempt_delay_",
         "first_success_delay_",
     )
-    excluded = metadata_cols | key_cols | leak_cols | EXCLUDED_MODEL_FEATURES
+    analysis_extra_excluded = _analysis_specific_excluded_features(
+        table_df,
+        analysis_id=analysis_id,
+        analysis_name=analysis_name,
+    )
+    excluded = metadata_cols | key_cols | leak_cols | EXCLUDED_MODEL_FEATURES | analysis_extra_excluded
 
     cols = []
     for f in table_df.schema.fields:

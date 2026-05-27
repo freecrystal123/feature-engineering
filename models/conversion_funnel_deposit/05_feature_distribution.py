@@ -61,7 +61,14 @@ def _numeric_cols_from_schema(df, excluded: set[str] | None = None) -> list[str]
     return cols
 
 
-def _select_feature_columns(df, scope: str, regex_pattern: str) -> list[str]:
+def _select_feature_columns(
+    df,
+    scope: str,
+    regex_pattern: str,
+    *,
+    analysis_id_ctx: str | None = None,
+    analysis_name_ctx: str | None = None,
+) -> list[str]:
     if scope not in {"all_numeric", "model_features"}:
         raise ValueError("feature_scope must be 'all_numeric' or 'model_features'.")
 
@@ -71,7 +78,11 @@ def _select_feature_columns(df, scope: str, regex_pattern: str) -> list[str]:
     }
 
     if scope == "model_features":
-        base_cols = get_funnel_feature_columns(df)
+        base_cols = get_funnel_feature_columns(
+            df,
+            analysis_id=analysis_id_ctx,
+            analysis_name=analysis_name_ctx,
+        )
     else:
         base_cols = _numeric_cols_from_schema(df, excluded=technical_excluded)
 
@@ -161,7 +172,13 @@ for analysis in get_analyses_to_run():
     if only_observation_complete and "observation_complete" in feat_df.columns:
         feat_df = feat_df.filter(F.col("observation_complete") == F.lit(True))
 
-    feature_cols = _select_feature_columns(feat_df, scope=feature_scope, regex_pattern=feature_regex)
+    feature_cols = _select_feature_columns(
+        feat_df,
+        scope=feature_scope,
+        regex_pattern=feature_regex,
+        analysis_id_ctx=analysis,
+        analysis_name_ctx=analysis_name,
+    )
     if not feature_cols:
         raise ValueError(
             f"No columns selected. Check feature_scope='{feature_scope}', feature_regex='{feature_regex}', "

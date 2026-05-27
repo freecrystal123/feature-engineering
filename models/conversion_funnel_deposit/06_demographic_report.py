@@ -196,7 +196,13 @@ for analysis in get_analyses_to_run():
             f"Table for analysis '{analysis_name}' does not contain label_deposit_success_30d."
         )
 
-    feature_candidates = set(get_funnel_feature_columns(feat_df))
+    feature_candidates = set(
+        get_funnel_feature_columns(
+            feat_df,
+            analysis_id=analysis,
+            analysis_name=analysis_name,
+        )
+    )
     if not feature_candidates:
         raise ValueError(f"No model-ready features found for analysis '{analysis_name}'.")
 

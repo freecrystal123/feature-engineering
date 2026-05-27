@@ -179,7 +179,11 @@ def train_and_register(analysis: str):
     entity_source_table = current_table_name(table_base)
 
     table_df = spark.table(primary_table)
-    feature_cols = get_funnel_feature_columns(table_df)
+    feature_cols = get_funnel_feature_columns(
+        table_df,
+        analysis_id=analysis,
+        analysis_name=analysis_name,
+    )
     if not feature_cols:
         raise ValueError(f"No numeric feature columns inferred from table '{primary_table}'.")
 

@@ -24,6 +24,7 @@ ANALYSIS_NAMES = {
     "analysis_1": "register_to_deposit_30d",
     "analysis_2": "register_to_deposit_30d_truewin",
     "analysis_3": "register_to_deposit_30d_igaming",
+    "analysis_4": "register_to_deposit_30d_truewin_no_ekyc",
 }
 
 
@@ -279,6 +280,27 @@ def render(context: dict | None = None) -> None:
             shap_df["cum_importance_pct"] = 0.0
 
         st.markdown("##### SHAP top features")
+        if not eval_df.empty:
+            eval_priority = eval_df.copy()
+            eval_priority["split_priority"] = eval_priority["split_name"].astype(str).str.lower().map(
+                {"test": 0, "validation": 1, "val": 1, "train": 2}
+            ).fillna(99)
+            eval_priority = eval_priority.sort_values(["split_priority", "split_name"], ascending=[True, True])
+            best_eval = eval_priority.iloc[0]
+            split_label = str(best_eval.get("split_name", "n/a")).lower()
+            st.markdown(
+                "\n".join(
+                    [
+                        f"- **Model metrics ({split_label} split):**",
+                        f"- Accuracy: {_fmt_pct(best_eval.get('accuracy'))}",
+                        f"- Precision: {_fmt_pct(best_eval.get('precision'))}",
+                        f"- Recall: {_fmt_pct(best_eval.get('recall'))}",
+                        f"- F1: {_fmt_pct(best_eval.get('f1'))}",
+                        f"- ROC-AUC: {_fmt_pct(best_eval.get('roc_auc'))}",
+                        f"- PR-AUC: {_fmt_pct(best_eval.get('pr_auc'))}",
+                    ]
+                )
+            )
         max_top_n = min(30, len(shap_df))
         default_top_n = min(12, max_top_n)
         top_n = st.slider("Top features", min_value=1, max_value=max_top_n, value=default_top_n)

@@ -276,9 +276,13 @@ def _get_wallet_tx_feature_columns(feat_df):
     return cols
 
 
-def _get_training_feature_columns(feat_df):
+def _get_training_feature_columns(feat_df, *, analysis_id_ctx: str | None = None, analysis_name_ctx: str | None = None):
     # Reuse the same feature-selection rule as model training.
-    return get_funnel_feature_columns(feat_df)
+    return get_funnel_feature_columns(
+        feat_df,
+        analysis_id=analysis_id_ctx,
+        analysis_name=analysis_name_ctx,
+    )
 
 
 def _build_numeric_segment_column(df, feature_col: str, n_bins: int):
@@ -1191,7 +1195,13 @@ for analysis in get_analyses_to_run():
 
             _show_header("Candidate wallet features to consider")
             wallet_candidates_all = _get_wallet_tx_feature_columns(feat_df)
-            training_features = set(_get_training_feature_columns(feat_df))
+            training_features = set(
+                _get_training_feature_columns(
+                    feat_df,
+                    analysis_id_ctx=analysis,
+                    analysis_name_ctx=analysis_name,
+                )
+            )
             wallet_candidates_training = [c for c in wallet_candidates_all if c in training_features]
             print(
                 {
@@ -1471,7 +1481,11 @@ for analysis in get_analyses_to_run():
         print("No wallet transaction features found in current feature table for this analysis.")
 
     _show_header("Training feature validation (all model features)")
-    training_feature_cols = _get_training_feature_columns(feat_df)
+    training_feature_cols = _get_training_feature_columns(
+        feat_df,
+        analysis_id_ctx=analysis,
+        analysis_name_ctx=analysis_name,
+    )
     print(
         {
             "training_features_found": len(training_feature_cols),
