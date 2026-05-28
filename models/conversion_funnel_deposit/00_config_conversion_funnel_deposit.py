@@ -35,12 +35,21 @@ ANALYSIS_SOURCE_SYSTEM_FILTERS = {
 # Per-analysis feature exclusions on top of EXCLUDED_MODEL_FEATURES.
 # Used to create controlled training variants without changing feature engineering.
 ANALYSIS_EXTRA_EXCLUDED_FEATURES = {
-    # Truewin variant without eKYC/KYC/verification step/status signals.
-    "analysis_4": set(),
+    # Truewin variant without eKYC/KYC/verification-derived features.
+    "analysis_4": {
+        # Demographic fields sourced from verification profile.
+        "customer_age_years",
+        "customer_nationality",
+        "customer_nationality_is_unknown",
+        "customer_nationality_is_other",
+    },
 }
 
 ANALYSIS_EXTRA_EXCLUDED_PREFIXES = {
-    "analysis_4": tuple(),
+    "analysis_4": (
+        # Remove all one-hot columns derived from verification nationality.
+        "customer_nationality_is_",
+    ),
 }
 
 ANALYSIS_EXTRA_EXCLUDED_SUBSTRINGS = {

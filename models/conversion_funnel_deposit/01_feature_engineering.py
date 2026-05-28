@@ -114,6 +114,40 @@ def _apply_analysis_source_filter(df, analysis_id_value: str):
     return out
 
 
+NO_EKYC_REMARK_OVERRIDE_COL_MAP = {
+    "num_user_remarks_7d": "__num_user_remarks_7d_no_ekyc",
+    "num_distinct_remark_operation_types_7d": "__num_distinct_remark_operation_types_7d_no_ekyc",
+    "num_distinct_remark_flow_steps_7d": "__num_distinct_remark_flow_steps_7d_no_ekyc",
+    "has_user_remark_7d": "__has_user_remark_7d_no_ekyc",
+    "first_user_remark_delay_hours_7d": "__first_user_remark_delay_hours_7d_no_ekyc",
+}
+NO_EKYC_REMARK_HELPER_COLUMNS = tuple(NO_EKYC_REMARK_OVERRIDE_COL_MAP.values())
+
+
+def _drop_no_ekyc_remark_helper_cols(df):
+    helper_cols = [c for c in NO_EKYC_REMARK_HELPER_COLUMNS if c in df.columns]
+    if helper_cols:
+        return df.drop(*helper_cols)
+    return df
+
+
+def _apply_no_ekyc_remark_overrides(df):
+    # Replace aggregate remark features using values recalculated from
+    # row-level remark records after removing eKYC/KYC/system_face steps.
+    out = df
+    for target_col, helper_col in NO_EKYC_REMARK_OVERRIDE_COL_MAP.items():
+        if target_col in out.columns and helper_col in out.columns:
+            out = out.withColumn(target_col, F.col(helper_col))
+    return out
+
+
+def _apply_analysis_feature_overrides(df, analysis_id_value: str):
+    out = df
+    if analysis_id_value == "analysis_4":
+        out = _apply_no_ekyc_remark_overrides(out)
+    return _drop_no_ekyc_remark_helper_cols(out)
+
+
 # COMMAND ----------
 
 users_dim = spark.table(DIM_USER)
@@ -1098,6 +1132,13 @@ if remark_ts_col:
             ).cast("int").alias(f"has_remark_flow_step_{flow_step}_7d")
         )
 
+    # Match the business rule used in ad-hoc SQL checks:
+    # keep only remark rows where UPPER(remark) NOT LIKE '%EKYC%'.
+    no_ekyc_row_condition = (
+        F.col("rm.remark_ts").isNotNull()
+        & (~F.coalesce(F.col("rm.remark_text").rlike("ekyc"), F.lit(False)))
+    )
+
     remark_features = (
         remark_enriched
         .groupBy("r.user_id", "r.source_system")
@@ -1107,6 +1148,11 @@ if remark_ts_col:
             F.countDistinct(F.when(F.col("rm.remark_ts").isNotNull(), F.col("remark_flow_step"))).cast("double").alias("num_distinct_remark_flow_steps_7d"),
             F.max(F.when(F.col("rm.remark_ts").isNotNull(), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_user_remark_7d"),
             F.min(F.col("remark_delay_hours")).cast("double").alias("first_user_remark_delay_hours_7d"),
+            F.count(F.when(no_ekyc_row_condition, F.col("rm.remark_ts"))).cast("double").alias("__num_user_remarks_7d_no_ekyc"),
+            F.countDistinct(F.when(no_ekyc_row_condition, F.col("rm.remark_operation_type"))).cast("double").alias("__num_distinct_remark_operation_types_7d_no_ekyc"),
+            F.countDistinct(F.when(no_ekyc_row_condition, F.col("remark_flow_step"))).cast("double").alias("__num_distinct_remark_flow_steps_7d_no_ekyc"),
+            F.max(F.when(no_ekyc_row_condition, F.lit(1)).otherwise(F.lit(0))).cast("int").alias("__has_user_remark_7d_no_ekyc"),
+            F.min(F.when(no_ekyc_row_condition, F.col("remark_delay_hours"))).cast("double").alias("__first_user_remark_delay_hours_7d_no_ekyc"),
             F.sum(F.when(F.col("rm.remark_text").rlike(risk_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_risk_remarks_7d"),
             F.max(F.when(F.col("rm.remark_text").rlike(risk_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_risk_remark_7d"),
             F.sum(F.when(F.col("rm.remark_text").rlike(fraud_remark_pattern), F.lit(1)).otherwise(F.lit(0))).cast("double").alias("num_fraud_remarks_7d"),
@@ -1570,6 +1616,7 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
 for analysis in get_analyses_to_run():
     analysis_name = ANALYSIS_NAMES[analysis]
     filtered_features = _apply_analysis_source_filter(features, analysis)
+    filtered_features = _apply_analysis_feature_overrides(filtered_features, analysis)
     published = publish_table(
         spark=spark,
         df=filtered_features.withColumn("created_at", F.current_timestamp()),
