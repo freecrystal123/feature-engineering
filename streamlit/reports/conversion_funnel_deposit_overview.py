@@ -14,7 +14,7 @@ REPORT_META = {
     "schema": "conversion_funnel_deposit",
     # "environments": ("training", "production"),
     "environments": ("training"),
-    "description": "Monthly register-to-deposit funnel with model evaluation and SHAP explainability.",
+    "description": "Monthly register-to-deposit funnel (since registration, as-of run date) with model evaluation and SHAP explainability.",
 }
 
 FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_2")
@@ -197,13 +197,13 @@ def render(context: dict | None = None) -> None:
     latest = funnel_df.iloc[0]
 
     st.subheader(f"Register -> Deposit Funnel ({analysis_name})")
-    st.caption("Label window: 30 days from registration. Cohort view is monthly by registration timestamp.")
+    st.caption("Outcome scope: since registration up to run date. Cohort view is monthly by registration timestamp.")
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Registrations (latest month)", _fmt_num(latest.get("registrations")))
-    k2.metric("Attempt rate", _fmt_pct(latest.get("attempt_rate_30d")))
-    k3.metric("Success rate", _fmt_pct(latest.get("success_rate_30d")))
-    k4.metric("Success | Attempt", _fmt_pct(latest.get("success_given_attempt_rate_30d")))
+    k2.metric("Attempt rate (as-of run)", _fmt_pct(latest.get("attempt_rate_30d")))
+    k3.metric("Success rate (as-of run)", _fmt_pct(latest.get("success_rate_30d")))
+    k4.metric("Success | Attempt (as-of run)", _fmt_pct(latest.get("success_given_attempt_rate_30d")))
 
     trend_df = funnel_df.sort_values("registration_month", ascending=True)[[
         "registration_month",
@@ -218,9 +218,9 @@ def render(context: dict | None = None) -> None:
         value_name="rate",
     )
     metric_label_map = {
-        "attempt_rate_30d": "Attempt rate (30d)",
-        "success_rate_30d": "Success rate (30d)",
-        "failed_given_attempt_rate_30d": "Failed | Attempt rate (30d)",
+        "attempt_rate_30d": "Attempt rate (as-of run)",
+        "success_rate_30d": "Success rate (as-of run)",
+        "failed_given_attempt_rate_30d": "Failed | Attempt rate (as-of run)",
     }
     trend_long["metric_label"] = trend_long["metric"].map(metric_label_map).fillna(trend_long["metric"])
     st.markdown("##### Funnel trend by cohort month")
@@ -234,7 +234,7 @@ def render(context: dict | None = None) -> None:
                 "metric_label:N",
                 title="Metric",
                 scale=alt.Scale(
-                    domain=["Attempt rate (30d)", "Success rate (30d)", "Failed | Attempt rate (30d)"],
+                    domain=["Attempt rate (as-of run)", "Success rate (as-of run)", "Failed | Attempt rate (as-of run)"],
                     range=["#4C78A8", "#2EBD85", "#E76F51"],
                 ),
             ),

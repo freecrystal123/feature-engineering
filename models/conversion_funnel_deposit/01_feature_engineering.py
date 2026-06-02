@@ -1377,7 +1377,8 @@ else:
 
 # COMMAND ----------
 
-# Deposit attempts/success in first 30d (target and funnel diagnostics)
+# Deposit attempts/success since registration until run time
+# (target and funnel diagnostics).
 dep_user_id_col = _pick_col(deposit, ["user_id"], "deposit user_id")
 dep_source_col = _pick_col(deposit, ["source_system"], "deposit source_system")
 dep_id_col = _pick_col(deposit, ["id"], "deposit id")
@@ -1425,7 +1426,7 @@ deposit_funnel_features = (
         (F.col("r.user_id") == F.col("d.user_id"))
         & (F.col("r.source_system") == F.col("d.source_system"))
         & (F.col("d.attempt_ts") >= F.col("r.registration_ts"))
-        & (F.col("d.attempt_ts") < (F.col("r.registration_ts") + F.expr(f"INTERVAL {int(LABEL_WINDOW_DAYS)} DAYS"))),
+        & (F.col("d.attempt_ts") < F.current_timestamp()),
         "left",
     )
     .groupBy("r.user_id", "r.source_system", "r.registration_ts")

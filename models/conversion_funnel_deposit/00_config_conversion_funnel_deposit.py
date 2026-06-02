@@ -86,6 +86,10 @@ SILVER_WALLET_TRANSACTION_ORDER = f"{READ_SILVER_DB}.wallet.wallet_transaction_o
 
 # Cohort + modeling windows
 COHORT_LOOKBACK_MONTHS = 12
+# Legacy name kept for compatibility:
+# used as minimum observation/follow-up days and as fallback for predeposit
+# feature cutoffs. Deposit conversion labels are computed as-of run date
+# (not capped to this 30-day window).
 LABEL_WINDOW_DAYS = 30
 EARLY_ACTIVITY_HOURS = 24
 VERIFICATION_WINDOW_DAYS = 7
