@@ -4,6 +4,7 @@ import base64
 import importlib
 import mimetypes
 import os
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -151,9 +152,71 @@ def _inject_css() -> None:
             font-size: 13px;
           }
 
+          [data-testid="stSidebar"] div[role="radiogroup"] > label p::after {
+            display: block;
+            margin-top: 3px;
+            color: #8292ab;
+            font-size: 10.5px;
+            font-weight: 500;
+            line-height: 1.2;
+            letter-spacing: 0.15px;
+          }
+
           [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
             border-color: #ff6f4c;
             background: linear-gradient(130deg, rgba(255, 111, 76, 0.17) 0%, rgba(255, 143, 62, 0.12) 100%);
+          }
+
+          .report-freshness {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 11px 0 20px 0;
+          }
+
+          .report-freshness-item {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            min-width: 205px;
+            padding: 9px 12px;
+            border: 1px solid #263b59;
+            border-radius: 10px;
+            background: rgba(16, 27, 45, 0.78);
+          }
+
+          .report-freshness-item div {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+          }
+
+          .report-freshness-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 999px;
+            background: #72a7d8;
+            box-shadow: 0 0 0 3px rgba(114, 167, 216, 0.12);
+          }
+
+          .report-freshness-dot-accent {
+            background: #ff8061;
+            box-shadow: 0 0 0 3px rgba(255, 128, 97, 0.14);
+          }
+
+          .report-freshness-label {
+            color: #899ab3;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.65px;
+            line-height: 1.25;
+            text-transform: uppercase;
+          }
+
+          .report-freshness strong {
+            color: #e4ecf8;
+            font-size: 13px;
+            font-weight: 600;
           }
         </style>
         """,
@@ -221,6 +284,38 @@ def _environment_label(environment: str) -> str:
     return mapping.get(str(environment).lower(), str(environment).capitalize())
 
 
+def _sidebar_updated_label(value) -> str:
+    raw_value = str(value or "").strip()
+    if not raw_value or raw_value.lower() in {"-", "none", "nan", "nat"}:
+        return "Update unavailable"
+
+    normalized = raw_value.replace(" UTC", "+00:00").replace("Z", "+00:00")
+    try:
+        timestamp = datetime.fromisoformat(normalized)
+    except ValueError:
+        return f"Updated {raw_value}"
+
+    timezone_suffix = " UTC" if raw_value.endswith(" UTC") or timestamp.tzinfo else ""
+    return f"Updated {timestamp.strftime('%d %b %Y · %H:%M')}{timezone_suffix}"
+
+
+def _css_content(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def _inject_sidebar_updated_css(entries: list[dict]) -> None:
+    rules = []
+    for label_index, entry in enumerate(entries, start=2):
+        subtitle = _css_content(_sidebar_updated_label(entry.get("updated_at")))
+        rules.append(
+            "[data-testid=\"stSidebar\"] div[role=\"radiogroup\"] "
+            f"> label:nth-of-type({label_index}) p::after {{ content: \"{subtitle}\"; }}"
+        )
+
+    if rules:
+        st.sidebar.markdown(f"<style>{''.join(rules)}</style>", unsafe_allow_html=True)
+
+
 def _discover_streamlit_rows() -> tuple[list[dict], list[str]]:
     rows: list[dict] = []
     warnings: list[str] = []
@@ -261,8 +356,22 @@ def _discover_streamlit_rows() -> tuple[list[dict], list[str]]:
         normalized_environments = tuple(
             str(env).strip().lower() for env in environments if str(env).strip()
         ) or ("production",)
+        get_last_updated_fn = getattr(module, "get_last_updated", None)
 
         for environment in normalized_environments:
+            updated_at = "-"
+            if callable(get_last_updated_fn):
+                try:
+                    updated_at = get_last_updated_fn(
+                        {
+                            "environment": environment,
+                            "schema": schema,
+                            "catalogs": CATALOG_NAMES,
+                        }
+                    )
+                except Exception as exc:
+                    warnings.append(f"Failed to load update time for {module_path}: {exc}")
+
             rows.append(
                 {
                     "source_type": "streamlit",
@@ -273,7 +382,7 @@ def _discover_streamlit_rows() -> tuple[list[dict], list[str]]:
                     "report_title": title,
                     "extension": ".py",
                     "size_bytes": 0,
-                    "updated_at": "-",
+                    "updated_at": updated_at,
                     "file_path": "",
                     "description": description,
                     "module_path": module_path,
@@ -334,6 +443,7 @@ def _build_catalog_entries(core_rows: list[dict], streamlit_rows: list[dict]) ->
                 "environment_label": _environment_label(environment),
                 "source_type": "streamlit",
                 "module_path": module_path,
+                "updated_at": str(row.get("updated_at", "-")),
             }
         )
 
@@ -400,6 +510,8 @@ def _render_sidebar_menu(entries: list[dict]) -> str:
     current_value = st.session_state.get(SIDEBAR_REPORT_KEY)
     if current_value not in sidebar_options:
         st.session_state[SIDEBAR_REPORT_KEY] = SIDEBAR_EMPTY_LABEL
+
+    _inject_sidebar_updated_css(filtered_entries)
 
     selected = st.sidebar.radio(
         "Available reports",

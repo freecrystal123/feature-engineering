@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from core.databricks_query_service import data_select, resolve_sql_http_path
+from reports._funnel_metadata import load_report_freshness, render_report_freshness
 
 REPORT_META = {
     "title": "Deposit Conversion Funnel Demographics",
@@ -175,6 +176,17 @@ def _fmt_float(value: float | int | None, digits: int = 4) -> str:
     if value is None or pd.isna(value):
         return "-"
     return f"{float(value):.{int(digits)}f}"
+
+
+def get_last_updated(context: dict | None = None):
+    context = context or {}
+    http_path = resolve_sql_http_path()
+    if not http_path:
+        return "-"
+
+    summary_table, _ = _resolve_table_names(context, _analysis_name())
+    freshness = load_report_freshness(http_path, summary_table)
+    return freshness.get("report_updated_at") or "-"
 
 
 def _to_int_or_none(value) -> int | None:
@@ -582,12 +594,17 @@ def render(context: dict | None = None) -> None:
 
     summary_df = summary_df.sort_values(["mean_abs_shap", "feature_rank"], ascending=[False, True]).reset_index(drop=True)
     segments_df = segments_df.copy()
+    try:
+        freshness = load_report_freshness(http_path, summary_table)
+    except Exception:
+        freshness = {}
 
     st.subheader(f"Demographic Deep Dive ({analysis_name})")
     st.caption(
         "Left side = not converted users, right side = converted users. "
         "Classical features are shown as detailed cards by feature."
     )
+    render_report_freshness(freshness)
 
     overall_n = None
     overall_conv_rate = None

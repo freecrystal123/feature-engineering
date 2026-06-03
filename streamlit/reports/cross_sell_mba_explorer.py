@@ -92,6 +92,19 @@ def _resolve_table_names(context: dict) -> tuple[str, str, str]:
 
 
 @st.cache_data(ttl=180)
+def _load_last_updated(http_path: str, rules_table: str):
+    query = f"""
+    SELECT MAX(CAST(run_ts AS TIMESTAMP)) AS report_updated_at
+    FROM {rules_table}
+    """
+    metadata_df = data_select(query=query, http_path=http_path)
+    if metadata_df.empty:
+        return None
+    updated_at = metadata_df.iloc[0].get("report_updated_at")
+    return None if updated_at is None or pd.isna(updated_at) else updated_at
+
+
+@st.cache_data(ttl=180)
 def _load_rules_dataset(http_path: str, rules_table: str, transactions_table: str) -> pd.DataFrame:
     query = f"""
     WITH rules_base AS (
@@ -253,6 +266,16 @@ def _apply_filters(rules_df: pd.DataFrame, antecedent_filter: str, consequent_fi
         ]
     filtered = filtered[filtered["lift"] >= float(min_lift)]
     return filtered
+
+
+def get_last_updated(context: dict | None = None):
+    context = context or {}
+    http_path = resolve_sql_http_path()
+    if not http_path:
+        return "-"
+
+    rules_table, _, _ = _resolve_table_names(context)
+    return _load_last_updated(http_path, rules_table) or "-"
 
 
 def render(context: dict | None = None) -> None:

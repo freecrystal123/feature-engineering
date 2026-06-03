@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from core.databricks_query_service import data_select, resolve_sql_http_path
+from reports._funnel_metadata import load_report_freshness, render_report_freshness
 
 REPORT_META = {
     "title": "Deposit Conversion Funnel SHAP",
@@ -152,6 +153,17 @@ def _fmt_num(value: float | int | None) -> str:
     return f"{int(value):,}"
 
 
+def get_last_updated(context: dict | None = None):
+    context = context or {}
+    http_path = resolve_sql_http_path()
+    if not http_path:
+        return "-"
+
+    funnel_table, _, _ = _resolve_table_names(context, _analysis_name())
+    freshness = load_report_freshness(http_path, funnel_table)
+    return freshness.get("report_updated_at") or "-"
+
+
 def render(context: dict | None = None) -> None:
     context = context or {}
     http_path = resolve_sql_http_path()
@@ -195,9 +207,14 @@ def render(context: dict | None = None) -> None:
     funnel_df["registration_month"] = pd.to_datetime(funnel_df["registration_month"], errors="coerce")
     funnel_df = funnel_df.sort_values("registration_month", ascending=False)
     latest = funnel_df.iloc[0]
+    try:
+        freshness = load_report_freshness(http_path, funnel_table)
+    except Exception:
+        freshness = {}
 
     st.subheader(f"Register -> Deposit Funnel ({analysis_name})")
     st.caption("Outcome scope: since registration up to run date. Cohort view is monthly by registration timestamp.")
+    render_report_freshness(freshness)
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Registrations (latest month)", _fmt_num(latest.get("registrations")))
