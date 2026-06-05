@@ -79,8 +79,10 @@ SILVER_USER_GROUP = f"{READ_SILVER_DB}.user.user_group"
 SILVER_USER_LOGIN = f"{READ_SILVER_DB}.user.user_login"
 SILVER_USER_LOGIN_LOG = f"{READ_SILVER_DB}.user.user_login_log"
 SILVER_USER_VERIFICATION = f"{READ_SILVER_DB}.user.user_verification"
+SILVER_USER_VERIFICATION_LOG = f"{READ_SILVER_DB}.user.user_verification_log"
 SILVER_USER_REMARK = f"{READ_SILVER_DB}.user.user_remark"
 SILVER_WALLET_DEPOSIT = f"{READ_SILVER_DB}.wallet.deposit"
+SILVER_WALLET_COUPON = f"{READ_SILVER_DB}.wallet.coupon"
 SILVER_WALLET_WALLET = f"{READ_SILVER_DB}.wallet.wallet"
 SILVER_WALLET_TRANSACTION_ORDER = f"{READ_SILVER_DB}.wallet.wallet_transaction_order"
 
@@ -95,6 +97,7 @@ EARLY_ACTIVITY_HOURS = 24
 VERIFICATION_WINDOW_DAYS = 7
 REMARK_WINDOW_DAYS = 7
 WALLET_WINDOW_DAYS = 7
+EKYC_JOURNEY_WINDOW_DAYS = 30
 SOURCE_SYSTEM_TOP_K = 10
 VERIFICATION_COUNTRY_TOP_K = 10
 # Fixed global list for nationality one-hot encoding in model features.

@@ -100,6 +100,7 @@ SUBJECT_SPECS: dict[str, SubjectSpec] = {
             "rpt_funnel_{analysis}",
             "rpt_shap_{analysis}",
             "rpt_eval_{analysis}",
+            "rpt_ekyc_journey_{analysis}",
         ),
         model_template="mdl_{analysis}",
         report_templates=(),
