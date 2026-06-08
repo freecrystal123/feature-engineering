@@ -30,6 +30,10 @@ def get_analyses_to_run():
     return [analysis_id]
 
 
+ANALYSES_TO_RUN = get_analyses_to_run()
+REQUIRES_USER_REMARKS = any(a != "analysis_5" for a in ANALYSES_TO_RUN)
+
+
 def _pick_col(df, candidates: list[str], label: str, required: bool = True) -> str | None:
     for c in candidates:
         if c in df.columns:
@@ -122,6 +126,23 @@ NO_EKYC_REMARK_OVERRIDE_COL_MAP = {
     "first_user_remark_delay_hours_7d": "__first_user_remark_delay_hours_7d_no_ekyc",
 }
 NO_EKYC_REMARK_HELPER_COLUMNS = tuple(NO_EKYC_REMARK_OVERRIDE_COL_MAP.values())
+USER_REMARK_DERIVED_COLUMN_SUBSTRINGS = ("remark", "user_remarks")
+
+COUPON_FEATURE_DEFAULTS = {
+    "num_coupons_predeposit_30d": 0.0,
+    "num_distinct_coupons_predeposit_30d": 0.0,
+    "has_coupon_predeposit_30d": 0,
+    "sum_coupon_amount_predeposit_30d": 0.0,
+    "avg_coupon_amount_predeposit_30d": None,
+    "max_coupon_amount_predeposit_30d": None,
+    "num_coupon_types_predeposit_30d": 0.0,
+    "num_coupon_statuses_predeposit_30d": 0.0,
+    "num_coupon_channels_predeposit_30d": 0.0,
+    "num_coupon_templates_predeposit_30d": 0.0,
+    "num_coupon_business_ids_predeposit_30d": 0.0,
+    "num_coupon_event_ids_predeposit_30d": 0.0,
+    "first_coupon_delay_hours_predeposit_30d": None,
+}
 
 
 def _drop_no_ekyc_remark_helper_cols(df):
@@ -129,6 +150,31 @@ def _drop_no_ekyc_remark_helper_cols(df):
     if helper_cols:
         return df.drop(*helper_cols)
     return df
+
+
+def _drop_user_remark_derived_cols(df):
+    cols_to_drop = [
+        c
+        for c in df.columns
+        if any(token in c.lower() for token in USER_REMARK_DERIVED_COLUMN_SUBSTRINGS)
+    ]
+    if cols_to_drop:
+        return df.drop(*cols_to_drop)
+    return df
+
+
+def _with_default_features(df, feature_defaults: dict[str, object]):
+    out = df
+    for feature_name, feature_default in feature_defaults.items():
+        if feature_default is None:
+            out = out.withColumn(feature_name, F.lit(None).cast("double"))
+        elif isinstance(feature_default, float):
+            out = out.withColumn(feature_name, F.lit(feature_default).cast("double"))
+        elif isinstance(feature_default, int):
+            out = out.withColumn(feature_name, F.lit(feature_default).cast("int"))
+        else:
+            out = out.withColumn(feature_name, F.lit(feature_default))
+    return out
 
 
 def _apply_no_ekyc_remark_overrides(df):
@@ -145,6 +191,8 @@ def _apply_analysis_feature_overrides(df, analysis_id_value: str):
     out = df
     if analysis_id_value == "analysis_4":
         out = _apply_no_ekyc_remark_overrides(out)
+    if analysis_id_value == "analysis_5":
+        out = _drop_user_remark_derived_cols(out)
     return _drop_no_ekyc_remark_helper_cols(out)
 
 
@@ -158,8 +206,9 @@ groups = spark.table(SILVER_USER_GROUP)
 login_methods = spark.table(SILVER_USER_LOGIN)
 login_logs = spark.table(SILVER_USER_LOGIN_LOG)
 verification = spark.table(SILVER_USER_VERIFICATION)
-remarks = spark.table(SILVER_USER_REMARK)
+remarks = spark.table(SILVER_USER_REMARK) if REQUIRES_USER_REMARKS else None
 deposit = spark.table(SILVER_WALLET_DEPOSIT)
+coupons = spark.table(SILVER_WALLET_COUPON) if spark.catalog.tableExists(SILVER_WALLET_COUPON) else None
 wallet_transactions = (
     spark.table(SILVER_WALLET_TRANSACTION_ORDER)
     if spark.catalog.tableExists(SILVER_WALLET_TRANSACTION_ORDER)
@@ -992,14 +1041,26 @@ if verified_status_col and verify_type_col and (birth_date_v_col or verification
 # COMMAND ----------
 
 # User remark features in first days after registration
-remark_ts_col = _pick_col(
-    remarks,
-    ["created_time_uae", "created_time", "updated_time_uae", "updated_time"],
-    "remark timestamp",
-    required=False,
+remark_ts_col = (
+    _pick_col(
+        remarks,
+        ["created_time_uae", "created_time", "updated_time_uae", "updated_time"],
+        "remark timestamp",
+        required=False,
+    )
+    if remarks is not None
+    else None
 )
-remark_operation_col = _pick_col(remarks, ["operation_type"], "remark operation_type", required=False)
-remark_text_col = _pick_col(remarks, ["remark"], "remark text", required=False)
+remark_operation_col = (
+    _pick_col(remarks, ["operation_type"], "remark operation_type", required=False)
+    if remarks is not None
+    else None
+)
+remark_text_col = (
+    _pick_col(remarks, ["remark"], "remark text", required=False)
+    if remarks is not None
+    else None
+)
 remark_flow_step_ohe_values = [
     "account_created",
     "ekyc_failed",
@@ -1377,6 +1438,90 @@ else:
 
 # COMMAND ----------
 
+# Direct coupon exposure before first successful deposit
+# (or until registration + 30d for users without successful deposit).
+if coupons is not None:
+    coupon_user_col = _pick_col(coupons, ["uid", "user_id"], "coupon user_id", required=False)
+    coupon_source_col = _pick_col(coupons, ["source_system"], "coupon source_system", required=False)
+    coupon_id_col = _pick_col(coupons, ["id"], "coupon id", required=False)
+    coupon_ts_col = _pick_col(
+        coupons,
+        ["created_time_uae", "created_time", "valid_start", "updated_time_uae", "updated_time"],
+        "coupon timestamp",
+        required=False,
+    )
+    coupon_amount_col = _pick_col(coupons, ["amount"], "coupon amount", required=False)
+    coupon_type_col = _pick_col(coupons, ["type"], "coupon type", required=False)
+    coupon_status_col = _pick_col(coupons, ["status"], "coupon status", required=False)
+    coupon_channel_col = _pick_col(coupons, ["channel"], "coupon channel", required=False)
+    coupon_template_col = _pick_col(coupons, ["coupon_tpl_id"], "coupon template", required=False)
+    coupon_business_col = _pick_col(coupons, ["business_id"], "coupon business", required=False)
+    coupon_event_col = _pick_col(coupons, ["event_id"], "coupon event", required=False)
+
+    if coupon_user_col and coupon_source_col and coupon_ts_col:
+        coupon_base = (
+            coupons
+            .select(
+                F.col(coupon_user_col).cast("long").alias("user_id"),
+                F.col(coupon_source_col).alias("source_system"),
+                F.col(coupon_id_col).cast("string").alias("coupon_id") if coupon_id_col else F.lit(None).cast("string").alias("coupon_id"),
+                _safe_to_timestamp(coupon_ts_col).alias("coupon_ts"),
+                F.col(coupon_amount_col).cast("double").alias("coupon_amount") if coupon_amount_col else F.lit(None).cast("double").alias("coupon_amount"),
+                F.col(coupon_type_col).cast("string").alias("coupon_type_id") if coupon_type_col else F.lit(None).cast("string").alias("coupon_type_id"),
+                F.col(coupon_status_col).cast("string").alias("coupon_status_id") if coupon_status_col else F.lit(None).cast("string").alias("coupon_status_id"),
+                F.col(coupon_channel_col).cast("string").alias("coupon_channel_id") if coupon_channel_col else F.lit(None).cast("string").alias("coupon_channel_id"),
+                F.col(coupon_template_col).cast("string").alias("coupon_template_id") if coupon_template_col else F.lit(None).cast("string").alias("coupon_template_id"),
+                F.col(coupon_business_col).cast("string").alias("coupon_business_id") if coupon_business_col else F.lit(None).cast("string").alias("coupon_business_id"),
+                F.col(coupon_event_col).cast("string").alias("coupon_event_id") if coupon_event_col else F.lit(None).cast("string").alias("coupon_event_id"),
+            )
+            .filter(F.col("coupon_ts").isNotNull())
+        )
+
+        coupon_features = (
+            registration_with_predeposit_cutoff.alias("r")
+            .join(
+                coupon_base.alias("c"),
+                (F.col("r.user_id") == F.col("c.user_id"))
+                & (F.col("r.source_system") == F.col("c.source_system"))
+                & (F.col("c.coupon_ts") >= F.col("r.registration_ts"))
+                & (F.col("c.coupon_ts") < F.col("r.predeposit_cutoff_ts")),
+                "left",
+            )
+            .groupBy("r.user_id", "r.source_system")
+            .agg(
+                F.count("c.coupon_ts").cast("double").alias("num_coupons_predeposit_30d"),
+                F.countDistinct("c.coupon_id").cast("double").alias("num_distinct_coupons_predeposit_30d"),
+                F.max(F.when(F.col("c.coupon_ts").isNotNull(), F.lit(1)).otherwise(F.lit(0))).cast("int").alias("has_coupon_predeposit_30d"),
+                F.sum(F.coalesce(F.col("c.coupon_amount"), F.lit(0.0))).cast("double").alias("sum_coupon_amount_predeposit_30d"),
+                F.avg(F.col("c.coupon_amount")).cast("double").alias("avg_coupon_amount_predeposit_30d"),
+                F.max(F.col("c.coupon_amount")).cast("double").alias("max_coupon_amount_predeposit_30d"),
+                F.countDistinct("c.coupon_type_id").cast("double").alias("num_coupon_types_predeposit_30d"),
+                F.countDistinct("c.coupon_status_id").cast("double").alias("num_coupon_statuses_predeposit_30d"),
+                F.countDistinct("c.coupon_channel_id").cast("double").alias("num_coupon_channels_predeposit_30d"),
+                F.countDistinct("c.coupon_template_id").cast("double").alias("num_coupon_templates_predeposit_30d"),
+                F.countDistinct("c.coupon_business_id").cast("double").alias("num_coupon_business_ids_predeposit_30d"),
+                F.countDistinct("c.coupon_event_id").cast("double").alias("num_coupon_event_ids_predeposit_30d"),
+                F.min(
+                    F.when(
+                        F.col("c.coupon_ts").isNotNull(),
+                        (F.col("c.coupon_ts").cast("long") - F.col("r.registration_ts").cast("long")) / 3600.0,
+                    )
+                ).cast("double").alias("first_coupon_delay_hours_predeposit_30d"),
+            )
+        )
+    else:
+        coupon_features = _with_default_features(
+            registration_base.select("user_id", "source_system"),
+            COUPON_FEATURE_DEFAULTS,
+        )
+else:
+    coupon_features = _with_default_features(
+        registration_base.select("user_id", "source_system"),
+        COUPON_FEATURE_DEFAULTS,
+    )
+
+# COMMAND ----------
+
 # Deposit attempts/success since registration until run time
 # (target and funnel diagnostics).
 dep_user_id_col = _pick_col(deposit, ["user_id"], "deposit user_id")
@@ -1466,6 +1611,7 @@ features = (
     .join(verification_features.alias("v"), on=["user_id", "source_system"], how="left")
     .join(remark_features.alias("rm"), on=["user_id", "source_system"], how="left")
     .join(wallet_features.alias("w"), on=["user_id", "source_system"], how="left")
+    .join(coupon_features.alias("c"), on=["user_id", "source_system"], how="left")
     .join(deposit_funnel_features.alias("d"), on=["user_id", "source_system", "registration_ts"], how="left")
     .withColumn("observation_complete", (F.current_timestamp() >= (F.col("registration_ts") + F.expr(f"INTERVAL {int(LABEL_WINDOW_DAYS)} DAYS"))))
     .withColumn("label_deposit_attempt_30d", F.when(F.coalesce(F.col("num_deposit_attempts_30d"), F.lit(0.0)) > 0, F.lit(1)).otherwise(F.lit(0)))
@@ -1598,6 +1744,11 @@ features = (
             "num_remark_customer_request_7d": 0.0,
             "has_remark_customer_request_7d": 0,
             **wallet_tx_defaults,
+            **{
+                _feature_name: _feature_default
+                for _feature_name, _feature_default in COUPON_FEATURE_DEFAULTS.items()
+                if _feature_default is not None
+            },
             "num_deposit_attempts_30d": 0.0,
             "num_deposit_success_30d": 0.0,
             "num_deposit_failure_30d": 0.0,
@@ -1614,7 +1765,7 @@ features = (
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {WRITE_SCHEMA}")
 
-for analysis in get_analyses_to_run():
+for analysis in ANALYSES_TO_RUN:
     analysis_name = ANALYSIS_NAMES[analysis]
     filtered_features = _apply_analysis_source_filter(features, analysis)
     filtered_features = _apply_analysis_feature_overrides(filtered_features, analysis)

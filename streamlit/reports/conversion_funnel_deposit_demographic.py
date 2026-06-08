@@ -26,6 +26,7 @@ ANALYSIS_NAMES = {
     "analysis_2": "register_to_deposit_30d_truewin",
     "analysis_3": "register_to_deposit_30d_igaming",
     "analysis_4": "register_to_deposit_30d_truewin_no_ekyc",
+    "analysis_5": "register_to_deposit_30d_truewin_no_ekyc_no_remarks_coupon",
 }
 
 CLASSIC_FEATURES = [

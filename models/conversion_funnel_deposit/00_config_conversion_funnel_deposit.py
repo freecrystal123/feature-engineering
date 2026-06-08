@@ -19,6 +19,7 @@ ANALYSIS_NAMES = {
     "analysis_2": "register_to_deposit_30d_truewin",
     "analysis_3": "register_to_deposit_30d_igaming",
     "analysis_4": "register_to_deposit_30d_truewin_no_ekyc",
+    "analysis_5": "register_to_deposit_30d_truewin_no_ekyc_no_remarks_coupon",
 }
 
 # Per-analysis source_system filters applied in feature engineering publish step.
@@ -30,38 +31,64 @@ ANALYSIS_SOURCE_SYSTEM_FILTERS = {
     "analysis_2": {"include": ["TRUEWIN"], "exclude": []},
     "analysis_3": {"include": None, "exclude": ["LOTTERY"]},
     "analysis_4": {"include": ["TRUEWIN"], "exclude": []},
+    "analysis_5": {"include": ["TRUEWIN"], "exclude": []},
 }
 
 # Per-analysis feature exclusions on top of EXCLUDED_MODEL_FEATURES.
 # Used to create controlled training variants without changing feature engineering.
+NO_EKYC_EXCLUDED_FEATURES = {
+    # Demographic fields sourced from verification profile.
+    "customer_age_years",
+    "customer_nationality",
+    "customer_nationality_is_unknown",
+    "customer_nationality_is_other",
+}
+
+NO_EKYC_EXCLUDED_PREFIXES = (
+    # Remove all one-hot columns derived from verification nationality.
+    "customer_nationality_is_",
+)
+
+NO_EKYC_EXCLUDED_SUBSTRINGS = (
+    # Remove verification/eKYC/KYC related features.
+    "ekyc",
+    "kyc",
+    "verification",
+    "verify",
+    "id_card",
+    "birth_date",
+)
+
+COUPON_FEATURE_PREFIXES = (
+    # Direct coupon features are reserved for analysis_5.
+    "coupon_",
+    "num_coupon_",
+    "num_distinct_coupon",
+    "has_coupon_",
+    "sum_coupon_",
+    "avg_coupon_",
+    "max_coupon_",
+    "first_coupon_",
+)
+
 ANALYSIS_EXTRA_EXCLUDED_FEATURES = {
     # Truewin variant without eKYC/KYC/verification-derived features.
-    "analysis_4": {
-        # Demographic fields sourced from verification profile.
-        "customer_age_years",
-        "customer_nationality",
-        "customer_nationality_is_unknown",
-        "customer_nationality_is_other",
-    },
+    "analysis_4": set(NO_EKYC_EXCLUDED_FEATURES),
+    # Same as analysis_4, but with no user_remarks-derived inputs and direct coupon features.
+    "analysis_5": set(NO_EKYC_EXCLUDED_FEATURES),
 }
 
 ANALYSIS_EXTRA_EXCLUDED_PREFIXES = {
-    "analysis_4": (
-        # Remove all one-hot columns derived from verification nationality.
-        "customer_nationality_is_",
-    ),
+    "analysis_1": COUPON_FEATURE_PREFIXES,
+    "analysis_2": COUPON_FEATURE_PREFIXES,
+    "analysis_3": COUPON_FEATURE_PREFIXES,
+    "analysis_4": NO_EKYC_EXCLUDED_PREFIXES + COUPON_FEATURE_PREFIXES,
+    "analysis_5": NO_EKYC_EXCLUDED_PREFIXES,
 }
 
 ANALYSIS_EXTRA_EXCLUDED_SUBSTRINGS = {
-    "analysis_4": (
-        # Remove verification/eKYC/KYC related features.
-        "ekyc",
-        "kyc",
-        "verification",
-        "verify",
-        "id_card",
-        "birth_date",
-    ),
+    "analysis_4": NO_EKYC_EXCLUDED_SUBSTRINGS,
+    "analysis_5": NO_EKYC_EXCLUDED_SUBSTRINGS + ("remark", "user_remarks"),
 }
 
 # Feature + output tables
