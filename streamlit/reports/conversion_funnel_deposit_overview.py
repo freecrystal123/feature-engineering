@@ -83,7 +83,7 @@ def _resolve_table_names(context: dict, analysis_name: str) -> tuple[str, str, s
     return funnel_table, shap_table, eval_table
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_funnel(http_path: str, funnel_table: str) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -106,7 +106,7 @@ def _load_funnel(http_path: str, funnel_table: str) -> pd.DataFrame:
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_shap(http_path: str, shap_table: str) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -121,7 +121,7 @@ def _load_shap(http_path: str, shap_table: str) -> pd.DataFrame:
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_eval(http_path: str, eval_table: str) -> pd.DataFrame:
     query = f"""
     SELECT

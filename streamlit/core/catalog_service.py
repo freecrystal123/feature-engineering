@@ -22,7 +22,7 @@ def environment_for_catalog(catalog_name: str) -> str:
     return "other"
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading...")
 def workspace_client():
     from databricks.sdk import WorkspaceClient
 
@@ -162,7 +162,7 @@ def _list_files_recursive(directory_path: str) -> tuple[list[dict], list[str]]:
     return files, warnings
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner="Loading...")
 def discover_core_reports(catalog_names: tuple[str, ...], reports_volume_name: str) -> tuple[list[dict], list[str], dict]:
     rows: list[dict] = []
     warnings: list[str] = []
@@ -235,4 +235,3 @@ def read_text_preview(file_path: str, limit_bytes: int) -> tuple[str, bool]:
     truncated = len(raw) > limit_bytes
     raw = raw[:limit_bytes]
     return raw.decode("utf-8", errors="replace"), truncated
-

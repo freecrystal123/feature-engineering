@@ -111,7 +111,7 @@ def _fmt_hours(value: float | int | None) -> str:
     return f"{hours / 24.0:.1f}d"
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_summary(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -139,7 +139,7 @@ def _load_summary(http_path: str, table_name: str, matured_only: bool) -> pd.Dat
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_funnel_stages(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     where_clause = _where_clause(matured_only)
     query = f"""
@@ -170,7 +170,7 @@ def _load_funnel_stages(http_path: str, table_name: str, matured_only: bool) -> 
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_monthly_trend(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -188,7 +188,7 @@ def _load_monthly_trend(http_path: str, table_name: str, matured_only: bool) -> 
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_status_signals(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     where_clause = _where_clause(matured_only)
     select_parts = []
@@ -230,7 +230,7 @@ def _load_status_signals(http_path: str, table_name: str, matured_only: bool) ->
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_journey_outcomes(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     query = f"""
     WITH grouped AS (
@@ -253,7 +253,7 @@ def _load_journey_outcomes(http_path: str, table_name: str, matured_only: bool) 
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_flow_paths(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     where_clause = _where_clause(matured_only)
     query = f"""
@@ -303,7 +303,7 @@ def _load_flow_paths(http_path: str, table_name: str, matured_only: bool) -> pd.
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_delay_buckets(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     where_clause = _where_clause(matured_only)
     query = f"""
@@ -359,7 +359,7 @@ def _load_delay_buckets(http_path: str, table_name: str, matured_only: bool) -> 
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_sequences(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -377,7 +377,7 @@ def _load_sequences(http_path: str, table_name: str, matured_only: bool) -> pd.D
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_fail_reasons(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -397,7 +397,7 @@ def _load_fail_reasons(http_path: str, table_name: str, matured_only: bool) -> p
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_coupon_summary(http_path: str, table_name: str, matured_only: bool) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -583,6 +583,15 @@ def _render_journey_flow_map(row: pd.Series, flow_paths_df: pd.DataFrame) -> Non
     recovery_time = _fmt_hours(row.get("avg_ekyc_recovery_hours"))
     flow_specs = [
         (
+            "no_ekyc_no_ftd",
+            [
+                ("Registration", "", ""),
+                ("No eKYC observed", "", "ekyc-flow-failure"),
+                ("No deposit", "", ""),
+                ("Pre-eKYC drop-off", _share_note(flow_paths_df, "no_ekyc_no_ftd"), "ekyc-flow-friction"),
+            ],
+        ),
+        (
             "healthy_converted",
             [
                 ("Registration", "", ""),
@@ -602,32 +611,13 @@ def _render_journey_flow_map(row: pd.Series, flow_paths_df: pd.DataFrame) -> Non
             ],
         ),
         (
-            "critical_converted",
-            [
-                ("Registration", "", ""),
-                ("eKYC failure", "", "ekyc-flow-failure"),
-                ("No approval observed", "", "ekyc-flow-failure"),
-                ("Still deposits", "", ""),
-                ("Critical case", _share_note(flow_paths_df, "critical_converted"), "ekyc-flow-critical"),
-            ],
-        ),
-        (
-            "converted_without_observed_approval",
-            [
-                ("Registration", "", ""),
-                ("No approval observed", "", "ekyc-flow-failure"),
-                ("FTD / deposit", "", ""),
-                ("Audit case", _share_note(flow_paths_df, "converted_without_observed_approval"), "ekyc-flow-critical"),
-            ],
-        ),
-        (
             "recovered_no_ftd",
             [
                 ("Registration", "", ""),
                 ("eKYC failure", "", "ekyc-flow-failure"),
                 ("Later approved", f"Avg failure → approval: {recovery_time}", "ekyc-flow-approved"),
                 ("No deposit", "", ""),
-                ("Recovered, no FTD", _share_note(flow_paths_df, "recovered_no_ftd"), "ekyc-flow-friction"),
+                ("Recovered and not converted", _share_note(flow_paths_df, "recovered_no_ftd"), "ekyc-flow-friction"),
             ],
         ),
         (
@@ -650,21 +640,31 @@ def _render_journey_flow_map(row: pd.Series, flow_paths_df: pd.DataFrame) -> Non
             ],
         ),
         (
+            "critical_converted",
+            [
+                ("Registration", "", ""),
+                ("eKYC failure", "", "ekyc-flow-failure"),
+                ("No approval observed", "", "ekyc-flow-failure"),
+                ("Still deposits", "", ""),
+                ("Critical case", _share_note(flow_paths_df, "critical_converted"), "ekyc-flow-critical"),
+            ],
+        ),
+        (
+            "converted_without_observed_approval",
+            [
+                ("Registration", "", ""),
+                ("No approval observed", "", "ekyc-flow-failure"),
+                ("FTD / deposit", "", ""),
+                ("Audit case", _share_note(flow_paths_df, "converted_without_observed_approval"), "ekyc-flow-critical"),
+            ],
+        ),
+        (
             "started_no_ftd",
             [
                 ("Registration", "", ""),
                 ("eKYC started", "", ""),
                 ("No approval / FTD", "", "ekyc-flow-failure"),
                 ("Started only", _share_note(flow_paths_df, "started_no_ftd"), "ekyc-flow-friction"),
-            ],
-        ),
-        (
-            "no_ekyc_no_ftd",
-            [
-                ("Registration", "", ""),
-                ("No eKYC observed", "", "ekyc-flow-failure"),
-                ("No deposit", "", ""),
-                ("Pre-eKYC drop-off", _share_note(flow_paths_df, "no_ekyc_no_ftd"), "ekyc-flow-friction"),
             ],
         ),
     ]

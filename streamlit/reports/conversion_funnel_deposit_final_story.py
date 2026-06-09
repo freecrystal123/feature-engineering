@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import altair as alt
 import pandas as pd
@@ -13,10 +14,10 @@ from reports import conversion_funnel_deposit_overview as overview_report
 from reports._funnel_metadata import load_report_freshness, render_report_freshness
 
 REPORT_META = {
-    "title": "Deposit Conversion Funnel Final Story",
+    "title": "Deposit Conversion Funnel Executive Story",
     "schema": "conversion_funnel_deposit",
     "environments": ("training",),
-    "description": "Presentation-ready conclusion report combining funnel reach, eKYC journey paths, SHAP hints, and observed demographic facts.",
+    "description": "Business-oriented conclusion report focused on where conversion friction happens before and after eKYC.",
 }
 
 ANALYSIS_NAMES = overview_report.ANALYSIS_NAMES
@@ -31,6 +32,53 @@ DEMOGRAPHIC_STORY_FEATURES = [
     "registration_device",
     "customer_age_years",
     "customer_nationality",
+]
+
+FEATURE_BUSINESS_ALIASES = {
+    "registration_hour": "Registration time of day",
+    "registration_weekday": "Registration weekday",
+    "registration_day_of_month": "Registration day of month",
+    "registration_weekend_flag": "Weekend registration",
+    "registration_device": "Registration device",
+    "registered_by_mobile": "Registration device",
+    "registered_by_desktop": "Registration device",
+    "num_login_methods": "Login method diversity",
+    "num_login_events_24h": "Login activity in first 24h",
+    "num_distinct_login_ip_24h": "Distinct login IPs in first 24h",
+    "num_distinct_login_channel_24h": "Distinct login channels in first 24h",
+    "first_coupon_delay_hours_predeposit_30d": "Time until first coupon before deposit",
+    "sum_coupon_amount_predeposit_30d": "Coupon value before first deposit",
+    "num_coupon_templates_predeposit_30d": "Coupon template variety",
+    "num_coupons_predeposit_30d": "Coupon count before first deposit",
+    "num_coupon_event_ids_predeposit_30d": "Coupon campaign/event variety",
+    "num_coupon_statuses_predeposit_30d": "Coupon status variety",
+    "num_distinct_group_types": "User group variety",
+    "customer_age_years": "Customer age",
+    "customer_nationality": "Customer nationality",
+}
+
+JOURNEY_STAGE_LABELS = {
+    "pre_ekyc": "Before eKYC",
+    "post_approval": "After eKYC approval / deposit activation",
+    "customer_profile": "Customer profile",
+    "other": "Other model signals",
+}
+
+JOURNEY_STAGE_CAPTIONS = {
+    "pre_ekyc": "Signals available around registration and early activity. Useful for the registration → eKYC friction story.",
+    "post_approval": "Activation and incentive signals before first deposit. Useful for the eKYC approved → deposit story, but still descriptive.",
+    "customer_profile": "Observed customer attributes. Descriptive only; they should not be read as causal levers.",
+    "other": "Signals that do not map cleanly to one business moment.",
+}
+
+EXECUTIVE_FLOW_KEYS = [
+    "no_ekyc_no_ftd",
+    "healthy_converted",
+    "recovered_converted",
+    "recovered_no_ftd",
+    "failure_no_ftd",
+    "verified_no_ftd",
+    "critical_converted",
 ]
 
 
@@ -82,6 +130,174 @@ def _feature_label(feature_name: str) -> str:
     return demographic_report._display_feature_name(feature_name)
 
 
+def _business_feature_label(feature_name: str) -> str:
+    name = str(feature_name)
+    if name in FEATURE_BUSINESS_ALIASES:
+        return FEATURE_BUSINESS_ALIASES[name]
+    return " ".join(part.capitalize() for part in name.replace("_", " ").split())
+
+
+def _feature_journey_stage(feature_name: str) -> str:
+    name = str(feature_name).lower()
+    if any(token in name for token in ("coupon", "bonus", "promo", "promotion")):
+        return "post_approval"
+    if any(token in name for token in ("age", "nationality", "gender", "country", "region")):
+        return "customer_profile"
+    if any(
+        token in name
+        for token in (
+            "registration",
+            "registered",
+            "login",
+            "device",
+            "platform",
+            "channel",
+            "mail",
+            "phone",
+            "ip",
+            "referrer",
+            "marketing",
+            "source",
+            "browser",
+            "os",
+        )
+    ):
+        return "pre_ekyc"
+    return "other"
+
+
+def _parse_segment_numbers(value: str) -> list[float]:
+    out: list[float] = []
+    for match in re.findall(r"-?\d+(?:\.\d+)?", str(value)):
+        try:
+            out.append(float(match))
+        except ValueError:
+            continue
+    return out
+
+
+def _is_underage_segment(raw_value: str) -> bool:
+    value = str(raw_value).strip()
+    if value in {"__MISSING__", "__OTHER__", "__OUTSIDE__"}:
+        return False
+
+    numbers = _parse_segment_numbers(value)
+    if not numbers:
+        return False
+
+    if value.startswith("[") and len(numbers) >= 2:
+        lower, upper = numbers[0], numbers[1]
+        return lower < 22 and upper <= 22
+
+    return len(numbers) == 1 and numbers[0] < 22
+
+
+def _is_unknown_nationality_segment(raw_value: str) -> bool:
+    value = str(raw_value).strip().lower()
+    return value in {"unknown", "__missing__", "missing", "none", "nan", ""}
+
+
+def _apply_business_segment_filters(fdf: pd.DataFrame, feature_name: str) -> pd.DataFrame:
+    if fdf.empty:
+        return fdf
+
+    out = fdf.copy()
+    if feature_name == "customer_age_years" and "segment_value" in out.columns:
+        out = out[~out["segment_value"].astype(str).apply(_is_underage_segment)].copy()
+
+    if feature_name == "customer_nationality" and "segment_value" in out.columns:
+        out = out[~out["segment_value"].astype(str).apply(_is_unknown_nationality_segment)].copy()
+
+    if out.empty:
+        return out
+
+    out["users"] = pd.to_numeric(out["users"], errors="coerce").fillna(0.0)
+    out["converted_users"] = pd.to_numeric(out["converted_users"], errors="coerce").fillna(0.0)
+    out["non_converted_users"] = (out["users"] - out["converted_users"]).clip(lower=0.0)
+    total_converted = float(out["converted_users"].sum())
+    total_non_converted = float(out["non_converted_users"].sum())
+    out["share_in_converted"] = out["converted_users"] / total_converted if total_converted > 0 else 0.0
+    out["share_in_non_converted"] = out["non_converted_users"] / total_non_converted if total_non_converted > 0 else 0.0
+
+    return out
+
+
+def _filter_executive_flow_paths(flow_paths_df: pd.DataFrame) -> pd.DataFrame:
+    if flow_paths_df.empty or "flow_key" not in flow_paths_df.columns:
+        return flow_paths_df
+
+    filtered = flow_paths_df[flow_paths_df["flow_key"].isin(EXECUTIVE_FLOW_KEYS)].copy()
+    if filtered.empty:
+        return filtered
+    filtered["_flow_order"] = filtered["flow_key"].map(
+        {flow_key: index for index, flow_key in enumerate(EXECUTIVE_FLOW_KEYS)}
+    )
+    return filtered.sort_values("_flow_order").drop(columns=["_flow_order"])
+
+
+def _render_business_css() -> None:
+    st.markdown(
+        """
+        <style>
+          .business-card-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin: 12px 0 8px;
+          }
+          .business-card {
+            border: 1px solid rgba(111, 158, 219, 0.32);
+            border-radius: 14px;
+            padding: 15px 16px;
+            background: linear-gradient(135deg, rgba(16, 28, 48, 0.92), rgba(10, 21, 38, 0.94));
+            min-height: 122px;
+          }
+          .business-card-good {
+            border-color: rgba(65, 196, 148, 0.44);
+          }
+          .business-card-warn {
+            border-color: rgba(255, 190, 92, 0.52);
+          }
+          .business-card-risk {
+            border-color: rgba(239, 91, 113, 0.52);
+          }
+          .business-card-label {
+            color: #8fa1bb;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }
+          .business-card-value {
+            color: #f1f6ff;
+            display: block;
+            font-size: 24px;
+            font-weight: 800;
+            line-height: 1.15;
+            margin: 7px 0 5px;
+          }
+          .business-card-copy {
+            color: #b7c4d8;
+            display: block;
+            font-size: 13px;
+            line-height: 1.35;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _business_card(title: str, value: str, body: str, css_class: str = "") -> str:
+    return (
+        f'<div class="business-card {css_class}">'
+        f'<span class="business-card-label">{title}</span>'
+        f'<span class="business-card-value">{value}</span>'
+        f'<span class="business-card-copy">{body}</span>'
+        "</div>"
+    )
+
+
 def _available_demographic_features(summary_df: pd.DataFrame, segments_df: pd.DataFrame) -> list[str]:
     if summary_df.empty or segments_df.empty or "feature_name" not in summary_df.columns:
         return []
@@ -112,10 +328,10 @@ def get_last_updated(context: dict | None = None):
 
 
 def _render_readout(row: pd.Series, flow_paths_df: pd.DataFrame) -> None:
-    st.markdown("#### Executive readout")
+    st.markdown("#### Executive story")
     st.caption(
-        "The largest friction points are before eKYC starts and after eKYC approval. "
-        "Unresolved eKYC failure is a much smaller slice of the cohort."
+        "Business conclusion: eKYC approval itself is not the main bottleneck. "
+        "The largest opportunities are activation before eKYC starts and deposit conversion after eKYC approval."
     )
 
     k1, k2, k3, k4 = st.columns(4)
@@ -124,21 +340,49 @@ def _render_readout(row: pd.Series, flow_paths_df: pd.DataFrame) -> None:
     k3.metric("FTD converted", _fmt_pct(row.get("ftd_conversion_rate")))
     k4.metric("FTD after verified", _fmt_pct(row.get("conversion_after_verified_rate")))
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric(
-        "Pre-eKYC drop-off",
-        _fmt_pct(_flow_value(flow_paths_df, "no_ekyc_no_ftd", "population_rate")),
-        help="Registered users with no observed eKYC and no FTD in the observation window.",
-    )
-    c2.metric(
-        "Post-approval drop-off",
-        _fmt_pct(_flow_value(flow_paths_df, "verified_no_ftd", "population_rate")),
-        help="Users approved in eKYC but with no observed FTD.",
-    )
-    c3.metric(
-        "Unresolved eKYC friction",
-        _fmt_pct(_flow_value(flow_paths_df, "failure_no_ftd", "population_rate")),
-        help="Users with explicit eKYC failure, no later approval observed, and no FTD.",
+    pre_share = _fmt_pct(_flow_value(flow_paths_df, "no_ekyc_no_ftd", "population_rate"))
+    pre_users = _fmt_num(_flow_value(flow_paths_df, "no_ekyc_no_ftd", "users"))
+    post_share = _fmt_pct(_flow_value(flow_paths_df, "verified_no_ftd", "population_rate"))
+    post_users = _fmt_num(_flow_value(flow_paths_df, "verified_no_ftd", "users"))
+    unresolved_share = _fmt_pct(_flow_value(flow_paths_df, "failure_no_ftd", "population_rate"))
+    unresolved_users = _fmt_num(_flow_value(flow_paths_df, "failure_no_ftd", "users"))
+    recovered_share = _fmt_pct(_flow_value(flow_paths_df, "recovered_converted", "population_rate"))
+    recovered_users = _fmt_num(_flow_value(flow_paths_df, "recovered_converted", "users"))
+
+    st.markdown(
+        '<div class="business-card-grid">'
+        + _business_card(
+            "What works",
+            _fmt_pct(row.get("conversion_after_verified_rate")),
+            "Once users are approved, conversion is strong. This suggests approval is not the main blocker.",
+            "business-card-good",
+        )
+        + _business_card(
+            "Before eKYC opportunity",
+            f"{pre_share}",
+            f"{pre_users} registered users do not reach eKYC/FTD. This is the first major friction point.",
+            "business-card-warn",
+        )
+        + _business_card(
+            "After approval opportunity",
+            f"{post_share}",
+            f"{post_users} approved users still do not deposit. This is the second major friction point.",
+            "business-card-warn",
+        )
+        + _business_card(
+            "True eKYC friction",
+            f"{unresolved_share}",
+            f"{unresolved_users} users fail eKYC and do not recover. This is real, but smaller than the two activation gaps.",
+            "business-card-risk",
+        )
+        + _business_card(
+            "Recovery path",
+            f"{recovered_share}",
+            f"{recovered_users} users fail first, recover, and still convert. Recovery appears commercially valuable.",
+            "business-card-good",
+        )
+        + "</div>",
+        unsafe_allow_html=True,
     )
 
 
@@ -155,6 +399,7 @@ def _build_observed_segment_rows(
     for _, shap_row in top_shap_df.iterrows():
         feature_name = str(shap_row.get("feature_name"))
         fdf = demographic_report._prepare_segments_feature_view(segments_df, feature_name)
+        fdf = _apply_business_segment_filters(fdf, feature_name)
         if fdf.empty:
             continue
 
@@ -186,9 +431,9 @@ def _build_observed_segment_rows(
         rows.append(
             {
                 "feature_name": feature_name,
-                "feature_label": _feature_label(feature_name),
+                "feature_label": _business_feature_label(feature_name),
                 "segment_label": str(segment_label),
-                "feature_segment": f"{_feature_label(feature_name)} · {segment_label}",
+                "feature_segment": f"{_business_feature_label(feature_name)} · {segment_label}",
                 "users": float(segment_row.get("users", 0.0)),
                 "conversion_rate": float(segment_row.get("conversion_rate", 0.0)),
                 "conversion_lift_pp": float(segment_row.get("conversion_lift_pp", 0.0)),
@@ -238,11 +483,79 @@ def _render_shap_segment_chart(segment_df: pd.DataFrame, *, title: str, color: s
     st.altair_chart(chart, use_container_width=True)
 
 
+def _build_signal_table(stage_shap_df: pd.DataFrame, segments_df: pd.DataFrame) -> pd.DataFrame:
+    if stage_shap_df.empty:
+        return pd.DataFrame()
+
+    low_segments = _build_observed_segment_rows(stage_shap_df, segments_df, direction="low")
+    high_segments = _build_observed_segment_rows(stage_shap_df, segments_df, direction="high")
+    low_lookup = {
+        str(row["feature_name"]): row
+        for _, row in low_segments.iterrows()
+    }
+    high_lookup = {
+        str(row["feature_name"]): row
+        for _, row in high_segments.iterrows()
+    }
+
+    rows: list[dict] = []
+    for _, shap_row in stage_shap_df.iterrows():
+        feature_name = str(shap_row.get("feature_name"))
+        low = low_lookup.get(feature_name)
+        high = high_lookup.get(feature_name)
+        rows.append(
+            {
+                "business_signal": _business_feature_label(feature_name),
+                "risk_segment": low.get("segment_label") if low is not None else "-",
+                "risk_conversion": low.get("conversion_rate") if low is not None else None,
+                "strong_segment": high.get("segment_label") if high is not None else "-",
+                "strong_conversion": high.get("conversion_rate") if high is not None else None,
+                "model_importance": shap_row.get("importance_pct"),
+                "mean_shap": shap_row.get("mean_shap"),
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out
+
+
+def _format_signal_table(signal_df: pd.DataFrame) -> pd.DataFrame:
+    show = signal_df.copy()
+    for column in ["risk_conversion", "strong_conversion", "model_importance"]:
+        if column in show.columns:
+            show[column] = show[column].apply(_fmt_pct)
+    if "mean_shap" in show.columns:
+        show["mean_shap"] = show["mean_shap"].apply(_fmt_float)
+    return show
+
+
+def _render_stage_signal_panel(stage: str, stage_df: pd.DataFrame, segments_df: pd.DataFrame) -> None:
+    st.markdown(f"##### {JOURNEY_STAGE_LABELS[stage]}")
+    st.caption(JOURNEY_STAGE_CAPTIONS[stage])
+
+    if stage_df.empty:
+        st.info("No top model signals mapped to this journey moment.")
+        return
+
+    signal_df = _build_signal_table(stage_df, segments_df)
+    if signal_df.empty:
+        st.info("No observed segment cuts available for these model signals.")
+        return
+
+    st.dataframe(
+        _format_signal_table(signal_df),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 def _render_shap_story(shap_df: pd.DataFrame, eval_df: pd.DataFrame, segments_df: pd.DataFrame) -> None:
-    st.markdown("#### 3. Model hints: SHAP features")
+    st.markdown("#### 3. What signals help explain the two friction points?")
     st.caption(
-        "SHAP is model explainability, not observed causality. "
-        "The feature list comes from SHAP importance; left/right segments are observed cohort cuts for those same features."
+        "This is the business lens on SHAP. SHAP ranks which signals help the model identify likely conversion, "
+        "while the segment columns show what actually happened in the cohort. This is not causal proof."
     )
 
     if shap_df.empty:
@@ -274,34 +587,71 @@ def _render_shap_story(shap_df: pd.DataFrame, eval_df: pd.DataFrame, segments_df
         )
 
     top_df = chart_df.head(DEFAULT_TOP_SHAP).copy()
-    low_conversion_segments = _build_observed_segment_rows(top_df, segments_df, direction="low")
-    high_conversion_segments = _build_observed_segment_rows(top_df, segments_df, direction="high")
+    top_df["journey_stage"] = top_df["feature_name"].astype(str).apply(_feature_journey_stage)
+
+    with st.expander("How are signals assigned to before vs after eKYC?", expanded=True):
+        st.markdown(
+            "\n".join(
+                [
+                    "- **Before eKYC:** registration, login, device, channel, IP, contact, referrer, marketing, and source signals. These describe acquisition and early activation before the customer reaches verification.",
+                    "- **After eKYC approval / deposit activation:** coupon, bonus, promotion, and pre-deposit incentive signals. These describe deposit activation before the first deposit; they are used as post-approval story signals only when interpreted together with the eKYC journey.",
+                    "- **Customer profile:** age, nationality, country/region, and similar attributes. These describe the customer base and should not be interpreted as causal levers.",
+                    "- This split is based on feature names/source semantics. It is not a separate SHAP model trained by journey step and should not be treated as causal evidence.",
+                ]
+            )
+        )
 
     left, right = st.columns(2)
     with left:
-        _render_shap_segment_chart(
-            low_conversion_segments,
-            title="Observed low-conversion segments",
-            color="#E76F51",
-        )
+        _render_stage_signal_panel("pre_ekyc", top_df[top_df["journey_stage"] == "pre_ekyc"].copy(), segments_df)
     with right:
-        _render_shap_segment_chart(
-            high_conversion_segments,
-            title="Observed high-conversion segments",
-            color="#2EBD85",
+        _render_stage_signal_panel(
+            "post_approval",
+            top_df[top_df["journey_stage"] == "post_approval"].copy(),
+            segments_df,
         )
 
-    show_df = top_df[
-        ["feature_name", "feature_rank", "mean_abs_shap", "mean_shap", "importance_pct", "sample_size"]
-    ].copy()
-    show_df["importance_pct"] = show_df["importance_pct"].apply(_fmt_pct)
-    show_df["mean_abs_shap"] = show_df["mean_abs_shap"].apply(_fmt_float)
-    show_df["mean_shap"] = show_df["mean_shap"].apply(_fmt_float)
-    st.dataframe(show_df, use_container_width=True, hide_index=True)
+    lower_left, lower_right = st.columns(2)
+    with lower_left:
+        _render_stage_signal_panel(
+            "customer_profile",
+            top_df[top_df["journey_stage"] == "customer_profile"].copy(),
+            segments_df,
+        )
+    with lower_right:
+        _render_stage_signal_panel("other", top_df[top_df["journey_stage"] == "other"].copy(), segments_df)
+
+    low_conversion_segments = _build_observed_segment_rows(top_df, segments_df, direction="low")
+    high_conversion_segments = _build_observed_segment_rows(top_df, segments_df, direction="high")
+
+    with st.expander("Model signal appendix: observed low/high conversion segments", expanded=False):
+        left, right = st.columns(2)
+        with left:
+            _render_shap_segment_chart(
+                low_conversion_segments,
+                title="Observed low-conversion segments",
+                color="#E76F51",
+            )
+        with right:
+            _render_shap_segment_chart(
+                high_conversion_segments,
+                title="Observed high-conversion segments",
+                color="#2EBD85",
+            )
+
+        show_df = top_df[
+            ["feature_name", "journey_stage", "feature_rank", "mean_abs_shap", "mean_shap", "importance_pct", "sample_size"]
+        ].copy()
+        show_df["journey_stage"] = show_df["journey_stage"].map(JOURNEY_STAGE_LABELS).fillna(show_df["journey_stage"])
+        show_df["importance_pct"] = show_df["importance_pct"].apply(_fmt_pct)
+        show_df["mean_abs_shap"] = show_df["mean_abs_shap"].apply(_fmt_float)
+        show_df["mean_shap"] = show_df["mean_shap"].apply(_fmt_float)
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
 
 
 def _render_demographic_feature_story(segments_df: pd.DataFrame, feature_name: str) -> None:
     fdf = demographic_report._prepare_segments_feature_view(segments_df, feature_name)
+    fdf = _apply_business_segment_filters(fdf, feature_name)
     if fdf.empty:
         return
 
@@ -323,10 +673,10 @@ def _render_demographic_feature_story(segments_df: pd.DataFrame, feature_name: s
         non_row = top_non.iloc[0]
         conv_row = top_conv.iloc[0]
         st.caption(
-            f"Main not-converted segment: `{non_row['segment_label']}` "
-            f"({_fmt_pct(non_row.get('share_in_non_converted'))} of not converted). "
-            f"Main converted segment: `{conv_row['segment_label']}` "
-            f"({_fmt_pct(conv_row.get('share_in_converted'))} of converted)."
+            f"Largest non-converted segment: `{non_row['segment_label']}` "
+            f"({_fmt_pct(non_row.get('share_in_non_converted'))} of non-converted users). "
+            f"Largest converted segment: `{conv_row['segment_label']}` "
+            f"({_fmt_pct(conv_row.get('share_in_converted'))} of converted users)."
         )
 
     left, right = st.columns(2)
@@ -415,10 +765,10 @@ def _render_demographic_feature_story(segments_df: pd.DataFrame, feature_name: s
 
 
 def _render_demographic_story(summary_df: pd.DataFrame, segments_df: pd.DataFrame) -> None:
-    st.markdown("#### 4. Observed demographic and registration facts")
+    st.markdown("#### 4. Who are these customers?")
     st.caption(
-        "This section is descriptive: it shows what actually happened by segment. "
-        "Unlike SHAP, these are observed cohort cuts, not model explainability."
+        "This section is observed behavior/profile, not model inference. "
+        "Use it to describe which customer segments over-index or under-index in conversion."
     )
 
     features = _available_demographic_features(summary_df, segments_df)
@@ -498,26 +848,30 @@ def render(context: dict | None = None) -> None:
     row = summary_df.iloc[0]
     journey_window_days = int(row.get("journey_window_days") or 30)
 
-    st.subheader(f"Funnel Analysis Final Story ({analysis_name})")
+    _render_business_css()
+
+    st.subheader(f"Deposit Funnel Executive Story ({analysis_name})")
     st.caption(
-        f"Presentation view for the first {journey_window_days} days after registration. "
-        "The story separates observed facts from model hints and focuses on friction before eKYC and after eKYC approval."
+        f"Business presentation view for the first {journey_window_days} days after registration. "
+        "The report separates what actually happened from model hints, and frames the opportunity before eKYC and after eKYC approval."
     )
     render_report_freshness(freshness)
 
     _render_readout(row, flow_paths_df)
 
     st.divider()
-    st.markdown("#### 1. Main journey stage reach")
-    st.caption("Observed user counts by stage: registration, eKYC start, eKYC approval, FTD attempt, and FTD conversion.")
+    st.markdown("#### 1. Where does the funnel lose customers?")
+    st.caption(
+        "Observed customer counts by stage. This is the simplest way to show that the biggest losses are not inside eKYC approval itself."
+    )
     ekyc_report._render_funnel_chart(stage_df)
 
     st.divider()
-    st.markdown("#### 2. eKYC-to-FTD journey patterns")
+    st.markdown("#### 2. Which customer paths explain the loss?")
     st.caption(
-        "Observed mutually exclusive paths. Shares are relative to the selected cohort and sum to 100%."
+        "Observed mutually exclusive paths. Use these rows to tell the story of healthy conversion, pre-eKYC drop-off, post-approval drop-off, and true eKYC friction."
     )
-    ekyc_report._render_journey_flow_map(row, flow_paths_df)
+    ekyc_report._render_journey_flow_map(row, _filter_executive_flow_paths(flow_paths_df))
 
     st.divider()
     _render_shap_story(shap_df, eval_df, demographic_segments_df)

@@ -113,7 +113,7 @@ def _resolve_table_names(context: dict, analysis_name: str) -> tuple[str, str]:
     return summary_table, segments_table
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_summary(http_path: str, summary_table: str) -> pd.DataFrame:
     query = f"""
     SELECT
@@ -137,7 +137,7 @@ def _load_summary(http_path: str, summary_table: str) -> pd.DataFrame:
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_segments(http_path: str, segments_table: str) -> pd.DataFrame:
     query = f"""
     SELECT

@@ -25,7 +25,7 @@ def _value_or_none(value):
     return value
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def load_report_freshness(http_path: str, table_name: str) -> dict:
     safe_table_name = _safe_table_name(table_name)
     query = f"""

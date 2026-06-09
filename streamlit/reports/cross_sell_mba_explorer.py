@@ -91,7 +91,7 @@ def _resolve_table_names(context: dict) -> tuple[str, str, str]:
     return rules_table, transactions_table, analysis_name
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_last_updated(http_path: str, rules_table: str):
     query = f"""
     SELECT MAX(CAST(run_ts AS TIMESTAMP)) AS report_updated_at
@@ -104,7 +104,7 @@ def _load_last_updated(http_path: str, rules_table: str):
     return None if updated_at is None or pd.isna(updated_at) else updated_at
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_rules_dataset(http_path: str, rules_table: str, transactions_table: str) -> pd.DataFrame:
     query = f"""
     WITH rules_base AS (
@@ -175,7 +175,7 @@ def _load_rules_dataset(http_path: str, rules_table: str, transactions_table: st
     return data_select(query=query, http_path=http_path)
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=180, show_spinner="Loading...")
 def _load_window_mix(http_path: str, transactions_table: str) -> pd.DataFrame:
     query = f"""
     SELECT
