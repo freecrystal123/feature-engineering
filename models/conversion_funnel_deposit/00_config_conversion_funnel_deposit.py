@@ -71,11 +71,23 @@ COUPON_FEATURE_PREFIXES = (
     "first_coupon_",
 )
 
+USER_GROUP_EXCLUDED_FEATURES = {
+    "num_user_groups",
+    "num_distinct_group_types",
+    "num_test_groups",
+    "has_any_group",
+    "num_non_test_groups",
+}
+
 ANALYSIS_EXTRA_EXCLUDED_FEATURES = {
     # Truewin variant without eKYC/KYC/verification-derived features.
     "analysis_4": set(NO_EKYC_EXCLUDED_FEATURES),
     # Same as analysis_4, but with no user_remarks-derived inputs and direct coupon features.
-    "analysis_5": set(NO_EKYC_EXCLUDED_FEATURES),
+    "analysis_5": set(NO_EKYC_EXCLUDED_FEATURES)
+    | USER_GROUP_EXCLUDED_FEATURES
+    | {
+        "days_since_registration",
+    },
 }
 
 ANALYSIS_EXTRA_EXCLUDED_PREFIXES = {
