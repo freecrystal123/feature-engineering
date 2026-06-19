@@ -271,7 +271,12 @@ def _verification_events_from_df(verification_df, event_source: str, status_hist
         .withColumn(
             "is_explicit_failure",
             F.when(
-                (F.col("verified_status_id") == F.lit(4)) | F.col("valid_fail_reason_id").isNotNull(),
+                (F.col("verified_status_id") == F.lit(4))
+                | (
+                    F.col("valid_fail_reason_id").isNotNull()
+                    & (F.coalesce(F.col("verified_status_id"), F.lit(-1)) != F.lit(3))
+                    & (F.coalesce(F.col("succeed_flag"), F.lit(0)) != F.lit(1))
+                ),
                 F.lit(1),
             ).otherwise(F.lit(0)),
         )
@@ -405,6 +410,43 @@ def _build_deposit_base():
     )
 
 
+def _build_login_base():
+    login_df = _optional_table(SILVER_USER_LOGIN_LOG)
+    if login_df is None:
+        return None
+
+    user_id_col = _pick_col(login_df, ["user_id", "uid"], "login log user_id", required=False)
+    source_col = _pick_col(login_df, ["source_system"], "login log source_system", required=False)
+    login_ts_expr = _available_timestamp_expr(
+        login_df,
+        ["created_time_uae", "created_time", "updated_time_uae", "updated_time"],
+        "login log timestamp",
+        required=False,
+    )
+    status_col = _pick_col(login_df, ["login_status", "status"], "login status", required=False)
+
+    if not user_id_col or not source_col or login_ts_expr is None:
+        return None
+
+    login_base = (
+        login_df
+        .select(
+            F.col(user_id_col).cast("long").alias("user_id"),
+            F.col(source_col).cast("string").alias("source_system"),
+            login_ts_expr.alias("login_event_ts"),
+            F.col(status_col).cast("int").alias("login_status") if status_col else F.lit(None).cast("int").alias("login_status"),
+        )
+        .filter(F.col("user_id").isNotNull())
+        .filter(F.col("source_system").isNotNull())
+        .filter(F.col("login_event_ts").isNotNull())
+    )
+
+    if status_col:
+        login_base = login_base.filter(F.col("login_status").isNull() | (F.col("login_status") == F.lit(1)))
+
+    return login_base
+
+
 def _build_coupon_base():
     coupon_df = _optional_table(SILVER_WALLET_COUPON)
     if coupon_df is None:
@@ -443,6 +485,7 @@ def _build_coupon_base():
 
 verification_events, verification_history_source = _build_verification_events()
 deposit_base = _build_deposit_base()
+login_base = _build_login_base()
 coupon_base = _build_coupon_base()
 
 # COMMAND ----------
@@ -634,7 +677,9 @@ for analysis in get_analyses_to_run():
                 F.min(F.when(F.col("is_verified") == F.lit(1), F.col("verification_event_ts"))).alias("first_ekyc_verified_ts"),
                 F.min(F.when(F.col("is_explicit_failure") == F.lit(1), F.col("verification_event_ts"))).alias("first_ekyc_failure_ts"),
                 F.min(F.when(F.col("is_under_review") == F.lit(1), F.col("verification_event_ts"))).alias("first_ekyc_under_review_ts"),
-                F.countDistinct(F.col("valid_fail_reason_id")).cast("long").alias("num_ekyc_fail_reasons_30d"),
+                F.countDistinct(
+                    F.when(F.col("is_explicit_failure") == F.lit(1), F.col("valid_fail_reason_id"))
+                ).cast("long").alias("num_ekyc_fail_reasons_30d"),
             )
             .withColumn("has_ekyc_event_30d", F.when(F.col("num_ekyc_events_30d") > F.lit(0), F.lit(1)).otherwise(F.lit(0)))
         )
@@ -772,6 +817,64 @@ for analysis in get_analyses_to_run():
             .withColumn("ekyc_review_to_verified_hours", F.lit(None).cast("double"))
         )
 
+    if login_base is not None:
+        post_ekyc_login_features = (
+            cohort_with_ftd.alias("c")
+            .join(
+                ekyc_features
+                .select(
+                    "unique_user_id",
+                    "has_ekyc_verified_30d",
+                    "first_ekyc_verified_ts",
+                )
+                .alias("e"),
+                on="unique_user_id",
+                how="inner",
+            )
+            .filter(F.coalesce(F.col("e.has_ekyc_verified_30d"), F.lit(0)) == F.lit(1))
+            .join(
+                login_base.alias("l"),
+                (F.col("c.user_id") == F.col("l.user_id"))
+                & (F.col("c.source_system") == F.col("l.source_system"))
+                & (F.col("l.login_event_ts") >= F.col("e.first_ekyc_verified_ts"))
+                & (
+                    F.col("l.login_event_ts")
+                    < F.coalesce(F.col("c.first_ftd_success_ts"), F.col("c.journey_end_ts"))
+                ),
+                "left",
+            )
+            .groupBy("c.unique_user_id")
+            .agg(
+                F.count(F.col("l.login_event_ts")).cast("long").alias("num_post_ekyc_login_events"),
+                F.max(F.col("l.login_event_ts")).alias("post_ekyc_last_login_ts"),
+            )
+            .withColumn(
+                "has_post_ekyc_login",
+                F.when(F.col("num_post_ekyc_login_events") > F.lit(0), F.lit(1)).otherwise(F.lit(0)),
+            )
+            .withColumn("post_ekyc_last_login_hour", F.hour("post_ekyc_last_login_ts").cast("int"))
+            .withColumn("post_ekyc_last_login_weekday", F.dayofweek("post_ekyc_last_login_ts").cast("int"))
+            .withColumn("post_ekyc_last_login_day_of_month", F.dayofmonth("post_ekyc_last_login_ts").cast("int"))
+            .withColumn(
+                "post_ekyc_last_login_weekend_flag",
+                F.when(F.col("post_ekyc_last_login_weekday").isin(1, 7), F.lit(1))
+                .when(F.col("post_ekyc_last_login_weekday").isNotNull(), F.lit(0))
+                .otherwise(F.lit(None).cast("int")),
+            )
+        )
+    else:
+        post_ekyc_login_features = (
+            cohort
+            .select("unique_user_id")
+            .withColumn("num_post_ekyc_login_events", F.lit(0).cast("long"))
+            .withColumn("has_post_ekyc_login", F.lit(0).cast("int"))
+            .withColumn("post_ekyc_last_login_ts", F.lit(None).cast("timestamp"))
+            .withColumn("post_ekyc_last_login_hour", F.lit(None).cast("int"))
+            .withColumn("post_ekyc_last_login_weekday", F.lit(None).cast("int"))
+            .withColumn("post_ekyc_last_login_day_of_month", F.lit(None).cast("int"))
+            .withColumn("post_ekyc_last_login_weekend_flag", F.lit(None).cast("int"))
+        )
+
     if coupon_base is not None:
         coupon_features = (
             cohort_with_ftd.alias("c")
@@ -811,6 +914,7 @@ for analysis in get_analyses_to_run():
     journey = (
         cohort_with_ftd
         .join(ekyc_features, on="unique_user_id", how="left")
+        .join(post_ekyc_login_features, on="unique_user_id", how="left")
         .join(coupon_features, on="unique_user_id", how="left")
         .fillna(
             {
@@ -826,6 +930,8 @@ for analysis in get_analyses_to_run():
                 "has_ekyc_black_list_30d": 0,
                 "ekyc_recovered_after_failure": 0,
                 "ekyc_recovered_after_review": 0,
+                "num_post_ekyc_login_events": 0,
+                "has_post_ekyc_login": 0,
                 "num_coupons_before_first_ftd": 0,
                 "num_coupon_types_before_first_ftd": 0,
                 "coupon_amount_before_first_ftd": 0.0,
@@ -929,6 +1035,7 @@ for analysis in get_analyses_to_run():
         )
         .withColumn("journey_window_days", F.lit(int(journey_window_days)))
         .withColumn("verification_history_source", F.lit(verification_history_source))
+        .withColumn("login_source_available", F.lit(login_base is not None))
         .withColumn("coupon_source_available", F.lit(coupon_base is not None))
         .withColumn("created_at", F.current_timestamp())
     )
@@ -949,6 +1056,7 @@ for analysis in get_analyses_to_run():
             "analysis": analysis_name,
             "journey_window_days": int(journey_window_days),
             "verification_history_source": verification_history_source,
+            "login_table_used": bool(login_base is not None),
             "coupon_table_used": bool(coupon_base is not None),
             "journey_table": journey_publish["current_table"],
         }

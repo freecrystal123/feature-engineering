@@ -7,7 +7,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from core.databricks_query_service import resolve_sql_http_path
+from core.databricks_query_service import data_select, resolve_sql_http_path
 from reports import conversion_funnel_deposit_demographic as demographic_report
 from reports import conversion_funnel_deposit_ekyc_journey as ekyc_report
 from reports import conversion_funnel_deposit_overview as overview_report
@@ -25,13 +25,33 @@ DEFAULT_ANALYSIS_ID = os.getenv("FUNNEL_FINAL_ANALYSIS", "analysis_5")
 DEFAULT_TOP_SHAP = 12
 
 DEMOGRAPHIC_STORY_FEATURES = [
+    "registration_day_of_month",
     "registration_hour",
     "registration_weekday",
-    "registration_day_of_month",
     "registration_weekend_flag",
     "registration_device",
     "customer_age_years",
     "customer_nationality",
+]
+
+PRE_EKYC_PROFILE_FEATURES = [
+    "registration_day_of_month",
+    "registration_hour",
+    "registration_weekday",
+    "registration_weekend_flag",
+    "registration_device",
+]
+
+POST_EKYC_PROFILE_FEATURES = [
+    "customer_age_years",
+    "customer_nationality",
+]
+
+POST_EKYC_APPROVAL_FEATURES = [
+    "post_ekyc_approval_day_of_month",
+    "post_ekyc_approval_hour",
+    "post_ekyc_approval_weekday",
+    "post_ekyc_approval_weekend_flag",
 ]
 
 FEATURE_BUSINESS_ALIASES = {
@@ -42,6 +62,10 @@ FEATURE_BUSINESS_ALIASES = {
     "registration_device": "Registration device",
     "registered_by_mobile": "Registration device",
     "registered_by_desktop": "Registration device",
+    "post_ekyc_approval_hour": "eKYC approval hour",
+    "post_ekyc_approval_weekday": "eKYC approval weekday",
+    "post_ekyc_approval_day_of_month": "eKYC approval day of month",
+    "post_ekyc_approval_weekend_flag": "eKYC approval weekend vs weekday",
     "num_login_methods": "Login method diversity",
     "num_login_events_24h": "Login activity in first 24h",
     "num_distinct_login_ip_24h": "Distinct login IPs in first 24h",
@@ -117,6 +141,12 @@ def _fmt_float(value: float | int | None, digits: int = 4) -> str:
     return f"{float(value):.{int(digits)}f}"
 
 
+def _fmt_pp(value: float | int | None) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    return f"{float(value):+.1f} pp"
+
+
 def _flow_value(flow_paths_df: pd.DataFrame, flow_key: str, column: str):
     if flow_paths_df.empty or "flow_key" not in flow_paths_df.columns:
         return None
@@ -127,7 +157,7 @@ def _flow_value(flow_paths_df: pd.DataFrame, flow_key: str, column: str):
 
 
 def _feature_label(feature_name: str) -> str:
-    return demographic_report._display_feature_name(feature_name)
+    return FEATURE_BUSINESS_ALIASES.get(str(feature_name), demographic_report._display_feature_name(feature_name))
 
 
 def _business_feature_label(feature_name: str) -> str:
@@ -233,6 +263,274 @@ def _filter_executive_flow_paths(flow_paths_df: pd.DataFrame) -> pd.DataFrame:
         {flow_key: index for index, flow_key in enumerate(EXECUTIVE_FLOW_KEYS)}
     )
     return filtered.sort_values("_flow_order").drop(columns=["_flow_order"])
+
+
+def _resolve_feature_table_name(context: dict, analysis_name: str) -> str:
+    environment = str(context.get("environment", "production")).strip().lower()
+    env_key = overview_report._environment_key(environment)
+    default_catalog = "ml_train" if env_key == "TRAINING" else "ml_prod"
+    default_table = f"{default_catalog}.conversion_funnel_deposit.feat_{analysis_name}_current"
+
+    feature_override = str(os.getenv(f"FUNNEL_FEATURE_TABLE_{env_key}", "")).strip() or str(
+        os.getenv("FUNNEL_FEATURE_TABLE", "")
+    ).strip()
+    return overview_report._safe_table_name(feature_override) if feature_override else overview_report._safe_table_name(default_table)
+
+
+def _quote_identifier(column_name: str) -> str:
+    clean = str(column_name).strip().replace("`", "``")
+    return f"`{clean}`"
+
+
+def _sql_string(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+@st.cache_data(ttl=180, show_spinner="Loading...")
+def _load_table_columns(http_path: str, table_name: str) -> tuple[str, ...]:
+    table = overview_report._safe_table_name(table_name)
+    columns_df = data_select(f"DESCRIBE TABLE {table}", http_path=http_path)
+    if columns_df.empty or "col_name" not in columns_df.columns:
+        return tuple()
+    columns = []
+    for raw_name in columns_df["col_name"].astype(str).tolist():
+        name = raw_name.strip()
+        if not name or name.startswith("#"):
+            continue
+        columns.append(name)
+    return tuple(columns)
+
+
+def _actual_column(column_name: str, available_columns: set[str]) -> str | None:
+    lookup = {column.lower(): column for column in available_columns}
+    return lookup.get(str(column_name).lower())
+
+
+JOURNEY_DERIVED_COLUMN_SQL = {
+    "post_ekyc_approval_day_of_month": "DAYOFMONTH(j.first_ekyc_verified_ts)",
+    "post_ekyc_approval_hour": "HOUR(j.first_ekyc_verified_ts)",
+    "post_ekyc_approval_weekday": "DAYOFWEEK(j.first_ekyc_verified_ts)",
+    "post_ekyc_approval_weekend_flag": "CASE WHEN DAYOFWEEK(j.first_ekyc_verified_ts) IN (1, 7) THEN 1 ELSE 0 END",
+}
+
+
+def _journey_select_expr(column_name: str) -> str:
+    clean = _quote_identifier(column_name)
+    derived_expr = JOURNEY_DERIVED_COLUMN_SQL.get(column_name)
+    if derived_expr:
+        return f"CAST({derived_expr} AS INT) AS {clean}"
+    return f"j.{clean} AS {clean}"
+
+
+def _post_approval_feature_specs() -> tuple[tuple[str, str, tuple[tuple[str, str, float], ...]], ...]:
+    hour_segments = tuple((str(value), str(value), float(value)) for value in range(24))
+    weekday_segments = tuple(
+        (str(value), demographic_report.WEEKDAY_LABELS[value], float(value)) for value in range(1, 8)
+    )
+    day_segments = tuple((str(value), str(value), float(value)) for value in range(1, 32))
+    weekend_segments = (
+        ("0", "Weekday", 0.0),
+        ("1", "Weekend", 1.0),
+    )
+
+    return (
+        ("post_ekyc_approval_day_of_month", "post_ekyc_approval_day_of_month", day_segments),
+        ("post_ekyc_approval_hour", "post_ekyc_approval_hour", hour_segments),
+        ("post_ekyc_approval_weekday", "post_ekyc_approval_weekday", weekday_segments),
+        ("post_ekyc_approval_weekend_flag", "post_ekyc_approval_weekend_flag", weekend_segments),
+    )
+
+
+def _profile_source_name(segments_df: pd.DataFrame, feature_name: str) -> str:
+    if feature_name != "registration_device":
+        return feature_name
+    available = set(segments_df["feature_name"].astype(str).unique().tolist())
+    if "registered_by_mobile" in available:
+        return "registered_by_mobile"
+    if "registered_by_desktop" in available:
+        return "registered_by_desktop"
+    return feature_name
+
+
+def _profile_segment_label(feature_name: str, raw_value: str) -> str:
+    value = str(raw_value)
+    ivalue = demographic_report._to_int_or_none(value)
+    if feature_name.endswith("weekday") and ivalue is not None:
+        return demographic_report.WEEKDAY_LABELS.get(ivalue, str(ivalue))
+    if feature_name.endswith("weekend_flag") and ivalue is not None:
+        return "Weekend" if ivalue == 1 else "Weekday"
+    if feature_name.endswith("hour") and ivalue is not None:
+        return str(ivalue)
+    if feature_name.endswith("day_of_month") and ivalue is not None:
+        return str(ivalue)
+    return demographic_report._classic_segment_label(feature_name, raw_value)
+
+
+def _profile_segment_order(feature_name: str, raw_value: str, default_order: float) -> float:
+    if feature_name.endswith("weekend_flag"):
+        value = str(raw_value).strip().lower()
+        if value in {"0", "0.0", "weekday"}:
+            return 0.0
+        if value in {"1", "1.0", "weekend"}:
+            return 1.0
+    return default_order
+
+
+def _build_profile_feature_specs(
+    segments_df: pd.DataFrame,
+    requested_features: list[str],
+    available_columns: set[str],
+) -> tuple[tuple[str, str, tuple[tuple[str, str, float], ...]], ...]:
+    specs = []
+    if segments_df.empty or "feature_name" not in segments_df.columns:
+        return tuple()
+
+    for feature_name in requested_features:
+        source_name = _profile_source_name(segments_df, feature_name)
+        actual_column = _actual_column(source_name, available_columns)
+        if not actual_column:
+            continue
+
+        feature_df = segments_df[segments_df["feature_name"].astype(str) == source_name].copy()
+        feature_df = _apply_business_segment_filters(feature_df, feature_name)
+        if feature_df.empty:
+            continue
+
+        feature_df = feature_df.sort_values(["segment_order", "users"], ascending=[True, False])
+        segments = []
+        for _, row in feature_df.iterrows():
+            raw_value = str(row.get("segment_value", ""))
+            if raw_value == "__OUTSIDE__":
+                continue
+            label = _profile_segment_label(feature_name, raw_value)
+            order = _profile_segment_order(feature_name, raw_value, float(row.get("segment_order") or 999999.0))
+            segments.append((raw_value, label, order))
+        if segments:
+            specs.append((feature_name, actual_column, tuple(segments)))
+
+    return tuple(specs)
+
+
+def _segment_condition(column_ref: str, raw_value: str, explicit_values: list[str], feature_name: str) -> str:
+    value = str(raw_value)
+    if value == "__MISSING__":
+        return f"{column_ref} IS NULL"
+
+    if value == "__OTHER__":
+        explicit = [v for v in explicit_values if v not in {"__MISSING__", "__OTHER__", "__OUTSIDE__"}]
+        extra_conditions = []
+        if feature_name == "customer_nationality":
+            extra_conditions.append(
+                f"LOWER(CAST({column_ref} AS STRING)) NOT IN ('unknown', 'missing', 'none', 'nan', '')"
+            )
+        if explicit:
+            value_list = ", ".join(_sql_string(v) for v in explicit)
+            extra_conditions.append(f"CAST({column_ref} AS STRING) NOT IN ({value_list})")
+        return " AND ".join([f"{column_ref} IS NOT NULL"] + extra_conditions)
+
+    numbers = _parse_segment_numbers(value)
+    if value.startswith("[") and len(numbers) >= 2:
+        lower, upper = numbers[0], numbers[1]
+        upper_operator = "<=" if value.endswith("]") else "<"
+        return f"CAST({column_ref} AS DOUBLE) >= {lower} AND CAST({column_ref} AS DOUBLE) {upper_operator} {upper}"
+
+    return f"CAST({column_ref} AS STRING) = {_sql_string(value)}"
+
+
+def _build_profile_segments_query(
+    feature_table: str,
+    journey_table: str,
+    pre_specs: tuple[tuple[str, str, tuple[tuple[str, str, float], ...]], ...],
+    post_specs: tuple[tuple[str, str, tuple[tuple[str, str, float], ...]], ...],
+    matured_only: bool,
+    post_journey_specs: tuple[tuple[str, str, tuple[tuple[str, str, float], ...]], ...] = tuple(),
+) -> str:
+    feature_table = overview_report._safe_table_name(feature_table)
+    journey_table = overview_report._safe_table_name(journey_table)
+    all_post_specs = tuple(post_journey_specs) + tuple(post_specs)
+    source_columns = sorted({spec[1] for spec in pre_specs + post_specs})
+    journey_source_columns = sorted({spec[1] for spec in post_journey_specs})
+    if not source_columns and not journey_source_columns:
+        return ""
+
+    base_select_columns = [
+        "CAST(f.unique_user_id AS STRING) AS unique_user_id",
+        "CAST(f.user_id AS BIGINT) AS user_id",
+        "CAST(f.source_system AS STRING) AS source_system",
+        *[
+            f"f.{_quote_identifier(column)} AS {_quote_identifier(column)}"
+            for column in source_columns
+        ],
+        *[
+            _journey_select_expr(column)
+            for column in journey_source_columns
+        ],
+        "CAST(COALESCE(j.has_ekyc_event_30d, 0) AS INT) AS has_ekyc_event_30d",
+        "CAST(COALESCE(j.has_ekyc_verified_30d, 0) AS INT) AS has_ekyc_verified_30d",
+        "CAST(COALESCE(j.has_ftd_success_30d, 0) AS INT) AS has_ftd_success_30d",
+        "CAST(COALESCE(j.observation_complete, FALSE) AS BOOLEAN) AS observation_complete",
+    ]
+    base_select = ",\n        ".join(base_select_columns)
+    matured_filter = "WHERE CAST(COALESCE(j.observation_complete, FALSE) AS BOOLEAN) = TRUE" if matured_only else ""
+
+    union_parts: list[str] = []
+    stage_specs = [
+        ("pre_ekyc", "eKYC start rate", "1 = 1", "COALESCE(b.has_ekyc_event_30d, 0)", pre_specs),
+        (
+            "post_ekyc",
+            "FTD after approval rate",
+            "COALESCE(b.has_ekyc_verified_30d, 0) = 1",
+            "COALESCE(b.has_ftd_success_30d, 0)",
+            all_post_specs,
+        ),
+    ]
+
+    for stage, metric_label, scope_condition, outcome_expr, specs in stage_specs:
+        for feature_name, source_column, segments in specs:
+            explicit_values = [segment[0] for segment in segments]
+            for raw_value, segment_label, segment_order in segments:
+                column_ref = f"b.{_quote_identifier(source_column)}"
+                condition = _segment_condition(column_ref, raw_value, explicit_values, feature_name)
+                union_parts.append(
+                    "\n".join(
+                        [
+                            "SELECT",
+                            f"  {_sql_string(stage)} AS journey_stage,",
+                            f"  {_sql_string(metric_label)} AS metric_label,",
+                            f"  {_sql_string(feature_name)} AS feature_name,",
+                            f"  {_sql_string(_feature_label(feature_name))} AS feature_label,",
+                            f"  {_sql_string(raw_value)} AS segment_value,",
+                            f"  {_sql_string(segment_label)} AS segment_label,",
+                            f"  CAST({float(segment_order)} AS DOUBLE) AS segment_order,",
+                            "  COUNT(*) AS users,",
+                            f"  SUM(CAST({outcome_expr} AS DOUBLE)) AS outcome_users",
+                            "FROM base b",
+                            f"WHERE {scope_condition} AND ({condition})",
+                        ]
+                    )
+                )
+
+    if not union_parts:
+        return ""
+
+    return f"""
+    WITH base AS (
+      SELECT
+        {base_select}
+      FROM {feature_table} f
+      INNER JOIN {journey_table} j
+        ON CAST(f.unique_user_id AS STRING) = CAST(j.unique_user_id AS STRING)
+      {matured_filter}
+    )
+    {" UNION ALL ".join(union_parts)}
+    """
+
+
+@st.cache_data(ttl=180, show_spinner="Loading...")
+def _load_profile_segments(http_path: str, query: str) -> pd.DataFrame:
+    if not str(query or "").strip():
+        return pd.DataFrame()
+    return data_select(query=query, http_path=http_path)
 
 
 def _render_business_css() -> None:
@@ -764,20 +1062,149 @@ def _render_demographic_feature_story(segments_df: pd.DataFrame, feature_name: s
         st.altair_chart(alt.layer(conversion_chart, zero_rule), use_container_width=True)
 
 
-def _render_demographic_story(summary_df: pd.DataFrame, segments_df: pd.DataFrame) -> None:
-    st.markdown("#### 4. Who are these customers?")
-    st.caption(
-        "This section is observed behavior/profile, not model inference. "
-        "Use it to describe which customer segments over-index or under-index in conversion."
-    )
+def _prepare_profile_segments(profile_segments_df: pd.DataFrame) -> pd.DataFrame:
+    if profile_segments_df.empty:
+        return profile_segments_df
 
-    features = _available_demographic_features(summary_df, segments_df)
-    if not features:
-        st.warning("No demographic or registration descriptor segments found.")
+    out = profile_segments_df.copy()
+    out["users"] = pd.to_numeric(out["users"], errors="coerce").fillna(0.0)
+    out["outcome_users"] = pd.to_numeric(out["outcome_users"], errors="coerce").fillna(0.0)
+    out = out[out["users"] > 0].copy()
+    if out.empty:
+        return out
+
+    group_cols = ["journey_stage", "feature_name"]
+    out["feature_users"] = out.groupby(group_cols)["users"].transform("sum")
+    out["feature_outcome_users"] = out.groupby(group_cols)["outcome_users"].transform("sum")
+    out["baseline_rate"] = out["feature_outcome_users"] / out["feature_users"].replace(0, pd.NA)
+    out["outcome_rate"] = out["outcome_users"] / out["users"].replace(0, pd.NA)
+    out["baseline_rate"] = pd.to_numeric(out["baseline_rate"], errors="coerce").fillna(0.0)
+    out["outcome_rate"] = pd.to_numeric(out["outcome_rate"], errors="coerce").fillna(0.0)
+    out["outcome_lift_pp"] = (out["outcome_rate"] - out["baseline_rate"]) * 100.0
+    return out
+
+
+def _render_profile_lift_chart(feature_df: pd.DataFrame, feature_name: str) -> None:
+    if feature_df.empty:
         return
 
-    for feature_name in features:
-        _render_demographic_feature_story(segments_df, feature_name)
+    chart_df = feature_df.sort_values(["segment_order", "users"], ascending=[True, False]).copy()
+    segment_order = chart_df["segment_label"].astype(str).tolist()
+    metric_label = str(chart_df["metric_label"].iloc[0])
+    baseline_rate = float(chart_df["baseline_rate"].iloc[0])
+
+    lowest = chart_df.sort_values(["outcome_lift_pp", "users"], ascending=[True, False]).iloc[0]
+    highest = chart_df.sort_values(["outcome_lift_pp", "users"], ascending=[False, False]).iloc[0]
+
+    st.markdown(f"###### {_feature_label(feature_name)}")
+    st.caption(
+        f"Baseline {metric_label.lower()}: `{_fmt_pct(baseline_rate)}`. "
+        f"Lowest segment: `{lowest['segment_label']}` ({_fmt_pp(lowest['outcome_lift_pp'])}). "
+        f"Highest segment: `{highest['segment_label']}` ({_fmt_pp(highest['outcome_lift_pp'])})."
+    )
+
+    zero_rule = alt.Chart(pd.DataFrame({"zero": [0.0]})).mark_rule(
+        color="#9AA4B2",
+        strokeDash=[4, 4],
+    ).encode(y="zero:Q")
+    chart = (
+        alt.Chart(chart_df)
+        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+        .encode(
+            x=alt.X(
+                "segment_label:N",
+                sort=segment_order,
+                title="Segment",
+                axis=alt.Axis(labelAngle=-35, labelLimit=120),
+            ),
+            y=alt.Y("outcome_lift_pp:Q", title="Observed propensity lift vs baseline (pp)"),
+            color=alt.condition(
+                "datum.outcome_lift_pp >= 0",
+                alt.value("#2EBD85"),
+                alt.value("#E76F51"),
+            ),
+            tooltip=[
+                alt.Tooltip("segment_label:N", title="Segment"),
+                alt.Tooltip("users:Q", title="Users", format=","),
+                alt.Tooltip("outcome_rate:Q", title=metric_label, format=".1%"),
+                alt.Tooltip("baseline_rate:Q", title="Feature baseline", format=".1%"),
+                alt.Tooltip("outcome_lift_pp:Q", title="Lift vs baseline (pp)", format=".1f"),
+            ],
+        )
+        .properties(title="Observed propensity lift", height=max(360, min(520, 240 + 8 * len(chart_df))))
+    )
+    st.altair_chart(alt.layer(chart, zero_rule), use_container_width=True)
+
+
+def _render_profile_stage(
+    profile_segments_df: pd.DataFrame,
+    *,
+    stage: str,
+    title: str,
+    caption: str,
+    feature_order: list[str],
+) -> None:
+    st.markdown(f"##### {title}")
+    st.caption(caption)
+
+    stage_df = profile_segments_df[profile_segments_df["journey_stage"] == stage].copy()
+    if stage_df.empty:
+        st.info("No observed profile cuts available for this journey step.")
+        return
+
+    available = set(stage_df["feature_name"].astype(str).unique().tolist())
+    for feature_name in feature_order:
+        if feature_name not in available:
+            continue
+        feature_df = stage_df[stage_df["feature_name"] == feature_name].copy()
+        _render_profile_lift_chart(feature_df, feature_name)
+
+
+def _render_demographic_story(
+    profile_segments_df: pd.DataFrame,
+    profile_error: str | None = None,
+    profile_warning: str | None = None,
+) -> None:
+    st.markdown("#### 4. What customer profiles over-index before and after eKYC?")
+    st.caption(
+        "Observed propensity lift, not model inference. The left side uses only pre-eKYC registration signals. "
+        "The right side uses eKYC approval timing plus eKYC-derived profile attributes, scoped to customers already approved in eKYC."
+    )
+
+    if profile_error:
+        st.warning(f"Profile-by-journey view unavailable: {profile_error}")
+        return
+    if profile_warning:
+        st.info(profile_warning)
+
+    profile_df = _prepare_profile_segments(profile_segments_df)
+    if profile_df.empty:
+        st.warning("No profile-by-journey segments found.")
+        return
+
+    left, right = st.columns(2)
+    with left:
+        _render_profile_stage(
+            profile_df,
+            stage="pre_ekyc",
+            title="Before eKYC: who reaches verification?",
+            caption=(
+                "Metric: eKYC start rate among registered users. "
+                "Negative lift means the segment is less likely than its baseline to reach eKYC."
+            ),
+            feature_order=PRE_EKYC_PROFILE_FEATURES,
+        )
+    with right:
+        _render_profile_stage(
+            profile_df,
+            stage="post_ekyc",
+            title="After eKYC approval: who deposits?",
+            caption=(
+                "Metric: FTD rate among eKYC-approved users. Timing cuts use the first observed eKYC approval timestamp. "
+                "Negative lift means the segment is less likely than the approved baseline to deposit."
+            ),
+            feature_order=POST_EKYC_APPROVAL_FEATURES + POST_EKYC_PROFILE_FEATURES,
+        )
 
 
 def render(context: dict | None = None) -> None:
@@ -820,6 +1247,7 @@ def render(context: dict | None = None) -> None:
     try:
         _, shap_table, eval_table = overview_report._resolve_table_names(context, analysis_name)
         ekyc_table = ekyc_report._resolve_table_name(context, analysis_name)
+        feature_table = _resolve_feature_table_name(context, analysis_name)
         demographic_summary_table, demographic_segments_table = demographic_report._resolve_table_names(
             context,
             analysis_name,
@@ -835,6 +1263,43 @@ def render(context: dict | None = None) -> None:
     except Exception as exc:
         st.error(f"Failed to load final story datasets: {exc}")
         return
+
+    profile_segments_df = pd.DataFrame()
+    profile_error = None
+    profile_warning = None
+    try:
+        feature_columns = set(_load_table_columns(http_path, feature_table))
+        journey_columns = set(_load_table_columns(http_path, ekyc_table))
+        pre_specs = _build_profile_feature_specs(
+            demographic_segments_df,
+            PRE_EKYC_PROFILE_FEATURES,
+            feature_columns,
+        )
+        post_specs = _build_profile_feature_specs(
+            demographic_segments_df,
+            POST_EKYC_PROFILE_FEATURES,
+            feature_columns,
+        )
+        post_journey_specs = tuple()
+        if "first_ekyc_verified_ts" in {column.lower() for column in journey_columns}:
+            post_journey_specs = _post_approval_feature_specs()
+        else:
+            profile_warning = (
+                "Post-eKYC approval-timing cuts are hidden because the eKYC journey report table does not contain "
+                "`first_ekyc_verified_ts`. Rerun notebook `07_ekyc_journey_report` for this analysis."
+            )
+
+        profile_query = _build_profile_segments_query(
+            feature_table=feature_table,
+            journey_table=ekyc_table,
+            pre_specs=pre_specs,
+            post_specs=post_specs,
+            matured_only=matured_only,
+            post_journey_specs=post_journey_specs,
+        )
+        profile_segments_df = _load_profile_segments(http_path, profile_query)
+    except Exception as exc:
+        profile_error = str(exc)
 
     if summary_df.empty:
         st.warning("No eKYC journey data found.")
@@ -877,4 +1342,4 @@ def render(context: dict | None = None) -> None:
     _render_shap_story(shap_df, eval_df, demographic_segments_df)
 
     st.divider()
-    _render_demographic_story(demographic_summary_df, demographic_segments_df)
+    _render_demographic_story(profile_segments_df, profile_error, profile_warning)
