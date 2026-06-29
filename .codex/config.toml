@@ -1,4 +1,0 @@
-
-[mcp_servers.databricks]
-command = "/Users/angelo-neto/.ai-dev-kit/.venv/bin/python"
-args = ["/Users/angelo-neto/.ai-dev-kit/repo/databricks-mcp-server/run_server.py"]
