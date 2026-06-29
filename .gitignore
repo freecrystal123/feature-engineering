@@ -2,3 +2,6 @@
 .DS_Store
 ops/migrations/*
 .databricks
+.agents
+.ai-dev-kit
+.codex
