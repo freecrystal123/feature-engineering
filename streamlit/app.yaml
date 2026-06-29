@@ -1,0 +1,8 @@
+command:
+  - python
+  - run_app.py
+env:
+  - name: DATABRICKS_ENABLE_EXPERIMENTAL_FILES_API_CLIENT
+    value: "true"
+  - name: DATABRICKS_SQL_HTTP_PATH
+    value: "/sql/1.0/warehouses/40cf42289274002e"

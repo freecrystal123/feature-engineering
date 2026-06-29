@@ -14,3 +14,8 @@ targets:
       analysis_cluster_id: 0417-232722-qblfgc6k
       training_schedule_pause_status: PAUSED
       prediction_schedule_pause_status: UNPAUSED
+    resources:
+      apps:
+        ml_reports_catalog:
+          name: machine-learning-reports
+          source_code_path: ../../streamlit

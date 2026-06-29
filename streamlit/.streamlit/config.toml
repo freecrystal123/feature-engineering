@@ -1,0 +1,10 @@
+[server]
+# Disable file-change reruns in deployed app containers.
+runOnSave = false
+fileWatcherType = "none"
+
+# Keep disconnected sessions alive longer to allow reconnection.
+disconnectedSessionTTL = 600
+
+[browser]
+gatherUsageStats = false
