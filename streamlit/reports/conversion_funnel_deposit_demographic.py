@@ -14,11 +14,11 @@ REPORT_META = {
     "title": "Deposit Conversion Funnel Demographics",
     "schema": "conversion_funnel_deposit",
     # "environments": ("training", "production"),
-    "environments": ("training"),
+    "environments": ("training", "production"),
     "description": "Side-by-side demographic characteristics for converted vs non-converted users.",
 }
 
-FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_2")
+FUNNEL_ANALYSIS = os.getenv("FUNNEL_ANALYSIS", "analysis_5")
 TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.]+$")
 
 ANALYSIS_NAMES = {
