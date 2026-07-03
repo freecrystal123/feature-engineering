@@ -17,12 +17,13 @@
 
 # COMMAND ----------
 
-for _w in ["analysis_id", "model_alias"]:
+for _w in ["analysis_id", "model_alias", "model_catalog"]:
     try: dbutils.widgets.remove(_w)
     except: pass
 
 dbutils.widgets.text("analysis_id", "analysis_1")
 dbutils.widgets.text("model_alias", "champion")
+dbutils.widgets.text("model_catalog", "ml_train")
 
 # COMMAND ----------
 
@@ -34,6 +35,7 @@ from pyspark.sql.types import DecimalType
 
 analysis_id   = dbutils.widgets.get("analysis_id").strip()
 model_alias   = dbutils.widgets.get("model_alias").strip()
+model_catalog = dbutils.widgets.get("model_catalog").strip()
 ANALYSIS_NAME = ANALYSIS_NAMES[analysis_id]
 
 FEATURE_COLS = [
@@ -93,7 +95,7 @@ print(f"Target week:    {infer_pd['week_start'].iloc[0]}")
 model = load_model(
     subject=SUBJECT_NAME,
     analysis_name=ANALYSIS_NAME,
-    catalog=WRITE_CATALOG,
+    catalog=model_catalog,
     alias=model_alias,
 )
 
@@ -113,6 +115,7 @@ print(f"Predicted gross turnover next week: {predicted_revenue:,.2f}")
 summary_pd = pd.DataFrame([{
     "analysis_id":        analysis_id,
     "analysis_name":      ANALYSIS_NAME,
+    "model_catalog":      model_catalog,
     "model_alias":        model_alias,
     "week_start":         str(infer_pd["week_start"].iloc[0]),
     "predicted_revenue":  predicted_revenue,
@@ -138,6 +141,8 @@ summary_publish = publish_table(
 
 print(json.dumps({
     "pred_current":      summary_publish["current_table"],
+    "model_catalog":     model_catalog,
+    "model_alias":       model_alias,
     "week_start":        str(infer_pd["week_start"].iloc[0]),
     "predicted_revenue": f"{predicted_revenue:,.2f}",
     "run_id":            summary_publish["run_id"],

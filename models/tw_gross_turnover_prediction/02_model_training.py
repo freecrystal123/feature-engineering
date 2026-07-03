@@ -93,6 +93,12 @@ FEATURE_COLS = [
 
 LABEL_COL = "revenue"
 
+SKOPS_TRUSTED_TYPES = [
+    "numpy.dtype",
+    "xgboost.core.Booster",
+    "xgboost.sklearn.XGBRegressor",
+]
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -225,6 +231,7 @@ with mlflow.start_run(run_name=f"train_{ANALYSIS_NAME}"):
         registered_model_name=model_name,
         input_example=X_example,
         signature=signature,
+        skops_trusted_types=SKOPS_TRUSTED_TYPES,
     )
 
     run_id    = mlflow.active_run().info.run_id
@@ -275,7 +282,12 @@ except Exception as e:
     promote = True
 
 if promote:
-    promote_alias(model_name=model_name, source_alias=candidate_alias, target_alias=champion_alias)
+    promote_alias(
+        model_name=model_name,
+        source_alias=candidate_alias,
+        target_alias=champion_alias,
+        remove_source_alias=False,
+    )
     print(f"Promoted {candidate_alias} → {champion_alias}")
 else:
     print("Challenger did not improve enough — champion retained.")

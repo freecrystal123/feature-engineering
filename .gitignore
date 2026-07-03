@@ -5,3 +5,5 @@ ops/migrations/*
 .agents
 .ai-dev-kit
 .codex
+.cursor
+ls

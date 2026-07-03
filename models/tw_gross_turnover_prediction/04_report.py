@@ -17,12 +17,13 @@
 
 # COMMAND ----------
 
-for _w in ["analysis_id", "model_alias", "mape_threshold", "n_eval_folds"]:
+for _w in ["analysis_id", "model_alias", "model_catalog", "mape_threshold", "n_eval_folds"]:
     try: dbutils.widgets.remove(_w)
     except: pass
 
 dbutils.widgets.text("analysis_id",    "analysis_1")
 dbutils.widgets.text("model_alias",    "champion")
+dbutils.widgets.text("model_catalog",  "ml_train")
 dbutils.widgets.text("mape_threshold", "15.0")
 dbutils.widgets.text("n_eval_folds",   "12")
 
@@ -41,6 +42,7 @@ from pyspark.sql.types import DecimalType
 
 analysis_id    = dbutils.widgets.get("analysis_id").strip()
 model_alias    = dbutils.widgets.get("model_alias").strip()
+model_catalog  = dbutils.widgets.get("model_catalog").strip()
 mape_threshold = float(dbutils.widgets.get("mape_threshold").strip())
 n_eval_folds   = int(dbutils.widgets.get("n_eval_folds").strip())
 ANALYSIS_NAME  = ANALYSIS_NAMES[analysis_id]
@@ -83,7 +85,7 @@ FEATURE_COLS = [
 model = load_model(
     subject=SUBJECT_NAME,
     analysis_name=ANALYSIS_NAME,
-    catalog=WRITE_CATALOG,
+    catalog=model_catalog,
     alias=model_alias,
 )
 
@@ -237,6 +239,7 @@ spark.sql(f"CREATE VOLUME IF NOT EXISTS {REPORT_SPACE}")
 
 eval_spark = (
     spark.createDataFrame(results_df)
+    .withColumn("model_catalog",  F.lit(model_catalog))
     .withColumn("model_alias",    F.lit(model_alias))
     .withColumn("overall_mape",   F.lit(overall_mape))
     .withColumn("mape_threshold", F.lit(mape_threshold))
@@ -289,7 +292,7 @@ html = f"""<!DOCTYPE html>
 </head>
 <body>
   <h1>TW Gross Turnover – Backtest Evaluation</h1>
-  <div class="meta">analysis: <strong>{ANALYSIS_NAME}</strong> | alias: {model_alias} | generated: {generated_at}</div>
+  <div class="meta">analysis: <strong>{ANALYSIS_NAME}</strong> | model catalog: {model_catalog} | alias: {model_alias} | generated: {generated_at}</div>
   <div class="kpi">
     <div class="card"><div class="label">Overall MAPE</div><div class="value" style="color:{status_color}">{overall_mape:.1f}%</div></div>
     <div class="card"><div class="label">Status</div><div class="value" style="color:{status_color}">{status_label}</div></div>
