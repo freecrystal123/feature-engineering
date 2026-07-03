@@ -117,9 +117,9 @@ for col in [f.name for f in train_spark.schema.fields if isinstance(f.dataType, 
 # Sort by week to preserve time ordering for walk-forward CV
 train_pd = train_spark.orderBy("week_start").toPandas().reset_index(drop=True)
 
-# Hold back the last 4 weeks for evaluation — model must NOT see them during training
+# Hold back recent weeks for evaluation when configured; 0 means train on all published rows.
 N_EVAL_HOLDOUT = 0
-train_pd_model = train_pd.iloc[:-N_EVAL_HOLDOUT]
+train_pd_model = train_pd if N_EVAL_HOLDOUT == 0 else train_pd.iloc[:-N_EVAL_HOLDOUT]
 
 available_feat_cols = [c for c in FEATURE_COLS if c in train_pd_model.columns]
 # Use numpy arrays to avoid pandas groupby SIGSEGV inside sklearn's TimeSeriesSplit
