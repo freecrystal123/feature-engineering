@@ -113,6 +113,36 @@ SUBJECT_SPECS: dict[str, SubjectSpec] = {
             use_current_as_entity_source=True,
         ),
     ),
+    "active_user_prediction": SubjectSpec(
+        schema="active_user_prediction",
+        report_folder="reports",
+        table_templates=(
+            "feat_{analysis}_train",
+            "feat_{analysis}_infer",
+            "pred_{analysis}",
+            "summary_{analysis}",
+            "summary_{analysis}_eval",
+        ),
+        model_template="mdl_{analysis}",
+        report_templates=(
+            "active_user_prediction_report_{analysis}.html",
+        ),
+    ),
+    "lottery_net_turnover_prediction": SubjectSpec(
+        schema="lottery_net_turnover_prediction",
+        report_folder="reports",
+        table_templates=(
+            "feat_{analysis}_train",
+            "feat_{analysis}_infer",
+            "pred_{analysis}",
+            "summary_{analysis}",
+            "summary_{analysis}_eval",
+        ),
+        model_template="mdl_{analysis}",
+        report_templates=(
+            "lottery_net_turnover_report_{analysis}.html",
+        ),
+    ),
     "tw_gross_turnover_prediction": SubjectSpec(
         schema="tw_gross_turnover_prediction",
         report_folder="reports",
