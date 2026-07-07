@@ -314,6 +314,196 @@ resources:
       queue:
         enabled: true
 
+    lottery_net_turnover_prediction_training:
+      name: lottery_net_turnover_prediction_training
+      tags:
+        solution: lottery_net_turnover_prediction
+        cadence: each_1m
+      schedule:
+        quartz_cron_expression: "0 30 2 1 * ?"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.training_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/lottery_net_turnover_prediction/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_1
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_training
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/lottery_net_turnover_prediction/02_model_training
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_1
+              candidate_alias: challenger
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: model_training
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/lottery_net_turnover_prediction/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_1
+              model_alias: challenger
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: html_report
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/lottery_net_turnover_prediction/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_1
+              model_alias: challenger
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
+    lottery_net_turnover_prediction_prediction:
+      name: lottery_net_turnover_prediction_prediction
+      tags:
+        solution: lottery_net_turnover_prediction
+        cadence: each_1d
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.prediction_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/lottery_net_turnover_prediction/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_1
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/lottery_net_turnover_prediction/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_1
+              model_alias: champion
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: html_report
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/lottery_net_turnover_prediction/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_1
+              model_alias: champion
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
+    active_user_prediction_training:
+      name: active_user_prediction_training
+      tags:
+        solution: active_user_prediction
+        cadence: each_1w
+      schedule:
+        quartz_cron_expression: "0 0 3 ? * MON"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.training_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/active_user_prediction/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_4
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_training
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/active_user_prediction/02_model_training
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_4
+              candidate_alias: challenger
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: model_training
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/active_user_prediction/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_4
+              model_alias: challenger
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: html_report
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/active_user_prediction/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_4
+              model_alias: challenger
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
+    active_user_prediction_prediction:
+      name: active_user_prediction_prediction
+      tags:
+        solution: active_user_prediction
+        cadence: each_1d
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: Asia/Dubai
+        pause_status: ${var.prediction_schedule_pause_status}
+      tasks:
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/active_user_prediction/01_feature_engineering
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_4
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: model_prediction
+          depends_on:
+            - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/active_user_prediction/03_model_prediction
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_4
+              model_alias: champion
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+        - task_key: html_report
+          depends_on:
+            - task_key: model_prediction
+          notebook_task:
+            notebook_path: ${workspace.file_path}/models/active_user_prediction/04_report
+            source: WORKSPACE
+            base_parameters:
+              analysis_id: analysis_4
+              model_alias: champion
+              model_catalog: ml_train
+          existing_cluster_id: ${var.analysis_cluster_id}
+      queue:
+        enabled: true
+
     conversion_funnel_bet_training:
       name: conversion_funnel_bet_training
       tags:
