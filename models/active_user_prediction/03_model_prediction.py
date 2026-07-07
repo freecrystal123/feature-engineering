@@ -29,6 +29,7 @@
 
 dbutils.widgets.text("analysis_id",     "analysis_4")
 dbutils.widgets.text("model_alias",     "champion")
+dbutils.widgets.text("model_catalog",   "ml_train")
 dbutils.widgets.text("churn_threshold", "0.7")
 
 # COMMAND ----------
@@ -41,6 +42,7 @@ from pyspark.sql.types import DecimalType
 
 analysis_id     = dbutils.widgets.get("analysis_id").strip()
 model_alias     = dbutils.widgets.get("model_alias").strip()
+model_catalog   = dbutils.widgets.get("model_catalog").strip()
 churn_threshold = float(dbutils.widgets.get("churn_threshold").strip())
 
 ANALYSIS_NAME = ANALYSIS_NAMES[analysis_id]
@@ -99,7 +101,7 @@ print(f"Active users last week: {active_users_last_week:,}")
 model = load_model(
     subject=SUBJECT_NAME,
     analysis_name=ANALYSIS_NAME,
-    catalog=WRITE_CATALOG,
+    catalog=model_catalog,
     alias=model_alias,
 )
 

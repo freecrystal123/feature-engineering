@@ -21,6 +21,7 @@
 dbutils.widgets.text("analysis_id",           "analysis_4")
 dbutils.widgets.text("seed",                  "42")
 dbutils.widgets.text("candidate_alias",       "challenger")
+dbutils.widgets.text("model_catalog",         "ml_train")
 dbutils.widgets.text("required_signature",    "true")
 dbutils.widgets.text("auto_promote_champion", "false")
 dbutils.widgets.text("champion_alias",        "champion")
@@ -52,6 +53,7 @@ def _to_bool(value: str, default: bool = False) -> bool:
 analysis_id           = dbutils.widgets.get("analysis_id").strip()
 seed                  = int(dbutils.widgets.get("seed"))
 candidate_alias       = dbutils.widgets.get("candidate_alias").strip()
+model_catalog         = dbutils.widgets.get("model_catalog").strip()
 required_signature    = _to_bool(dbutils.widgets.get("required_signature"), default=True)
 auto_promote_champion = _to_bool(dbutils.widgets.get("auto_promote_champion"), default=False)
 champion_alias        = dbutils.widgets.get("champion_alias").strip()
@@ -80,6 +82,10 @@ FEATURE_COLS = [
 ]
 
 LABEL_COL = "label"
+
+SKOPS_TRUSTED_TYPES = [
+    "numpy.dtype",
+]
 
 # COMMAND ----------
 
@@ -153,7 +159,7 @@ print(f"CV ROC-AUC: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
 model_name = build_model_name(
     subject=SUBJECT_NAME,
     analysis_name=ANALYSIS_NAME,
-    catalog=WRITE_CATALOG,
+    catalog=model_catalog,
 )
 
 # Cast all feature columns to float64 so MLflow signature has no integer columns,
@@ -175,6 +181,7 @@ with mlflow.start_run(run_name=f"train_{ANALYSIS_NAME}"):
         "cv_roc_auc_mean": float(cv_scores.mean()),
         "cv_roc_auc_std":  float(cv_scores.std()),
         "write_catalog":   WRITE_CATALOG,
+        "model_catalog":   model_catalog,
         "candidate_alias": candidate_alias,
     })
     mlflow.log_text("\n".join(available_feat_cols), "features.txt")
@@ -185,6 +192,7 @@ with mlflow.start_run(run_name=f"train_{ANALYSIS_NAME}"):
         registered_model_name=model_name,
         input_example=X_example,
         signature=signature,
+        skops_trusted_types=SKOPS_TRUSTED_TYPES,
     )
 
     run_id    = mlflow.active_run().info.run_id

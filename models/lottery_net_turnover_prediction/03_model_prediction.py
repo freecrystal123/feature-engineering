@@ -24,6 +24,7 @@ for _w in ["analysis_id", "model_alias"]:
 
 dbutils.widgets.text("analysis_id", "analysis_1")
 dbutils.widgets.text("model_alias", "champion")
+dbutils.widgets.text("model_catalog", "ml_train")
 
 # COMMAND ----------
 
@@ -35,6 +36,7 @@ from pyspark.sql.types import DecimalType
 
 analysis_id   = dbutils.widgets.get("analysis_id").strip()
 model_alias   = dbutils.widgets.get("model_alias").strip()
+model_catalog = dbutils.widgets.get("model_catalog").strip()
 ANALYSIS_NAME = ANALYSIS_NAMES[analysis_id]
 
 FEATURE_COLS = [
@@ -83,7 +85,7 @@ print(f"Target week: {infer_dict['week_start']}")
 model = load_model(
     subject=SUBJECT_NAME,
     analysis_name=ANALYSIS_NAME,
-    catalog=WRITE_CATALOG,
+    catalog=model_catalog,
     alias=model_alias,
 )
 

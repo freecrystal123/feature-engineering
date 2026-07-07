@@ -15,13 +15,14 @@
 
 # COMMAND ----------
 
-for _w in ["analysis_id", "seed", "candidate_alias", "champion_alias", "required_signature"]:
+for _w in ["analysis_id", "seed", "candidate_alias", "model_catalog", "champion_alias", "required_signature"]:
     try: dbutils.widgets.remove(_w)
     except: pass
 
 dbutils.widgets.text("analysis_id",        "analysis_1")
 dbutils.widgets.text("seed",               "42")
 dbutils.widgets.text("candidate_alias",    "challenger")
+dbutils.widgets.text("model_catalog",      "ml_train")
 dbutils.widgets.text("champion_alias",     "champion")
 dbutils.widgets.text("required_signature", "true")
 
@@ -50,6 +51,7 @@ def _to_bool(v, default=False):
 analysis_id        = dbutils.widgets.get("analysis_id").strip()
 seed               = int(dbutils.widgets.get("seed").strip())
 candidate_alias    = dbutils.widgets.get("candidate_alias").strip()
+model_catalog      = dbutils.widgets.get("model_catalog").strip()
 champion_alias     = dbutils.widgets.get("champion_alias").strip()
 required_signature = _to_bool(dbutils.widgets.get("required_signature"), default=True)
 ANALYSIS_NAME      = ANALYSIS_NAMES[analysis_id]
@@ -159,7 +161,7 @@ pipeline.fit(X, y)
 model_name = build_model_name(
     subject=SUBJECT_NAME,
     analysis_name=ANALYSIS_NAME,
-    catalog=WRITE_CATALOG,
+    catalog=model_catalog,
 )
 
 X_example = train_pd[available_cols].head(3).astype("float64")
@@ -176,6 +178,7 @@ with mlflow.start_run(run_name=f"train_{ANALYSIS_NAME}") as run:
         "seed":            seed,
         "feature_cols":    json.dumps(available_cols),
         "candidate_alias": candidate_alias,
+        "model_catalog":   model_catalog,
     })
     mlflow.log_metrics({
         "cv_mape_mean": cv_mape,

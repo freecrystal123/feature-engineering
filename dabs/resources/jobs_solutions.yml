@@ -340,6 +340,7 @@ resources:
             base_parameters:
               analysis_id: analysis_1
               candidate_alias: challenger
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: model_prediction
           depends_on:
@@ -350,6 +351,7 @@ resources:
             base_parameters:
               analysis_id: analysis_1
               model_alias: challenger
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: html_report
           depends_on:
@@ -360,6 +362,7 @@ resources:
             base_parameters:
               analysis_id: analysis_1
               model_alias: challenger
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
       queue:
         enabled: true
@@ -390,6 +393,7 @@ resources:
             base_parameters:
               analysis_id: analysis_1
               model_alias: champion
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: html_report
           depends_on:
@@ -400,6 +404,7 @@ resources:
             base_parameters:
               analysis_id: analysis_1
               model_alias: champion
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
       queue:
         enabled: true
@@ -419,7 +424,7 @@ resources:
             notebook_path: ${workspace.file_path}/models/active_user_prediction/01_feature_engineering
             source: WORKSPACE
             base_parameters:
-              analysis_id: all
+              analysis_id: analysis_4
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: model_training
           depends_on:
@@ -428,8 +433,9 @@ resources:
             notebook_path: ${workspace.file_path}/models/active_user_prediction/02_model_training
             source: WORKSPACE
             base_parameters:
-              analysis_id: all
+              analysis_id: analysis_4
               candidate_alias: challenger
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: model_prediction
           depends_on:
@@ -438,8 +444,9 @@ resources:
             notebook_path: ${workspace.file_path}/models/active_user_prediction/03_model_prediction
             source: WORKSPACE
             base_parameters:
-              analysis_id: all
+              analysis_id: analysis_4
               model_alias: challenger
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: html_report
           depends_on:
@@ -448,8 +455,9 @@ resources:
             notebook_path: ${workspace.file_path}/models/active_user_prediction/04_report
             source: WORKSPACE
             base_parameters:
-              analysis_id: all
+              analysis_id: analysis_4
               model_alias: challenger
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
       queue:
         enabled: true
@@ -469,7 +477,7 @@ resources:
             notebook_path: ${workspace.file_path}/models/active_user_prediction/01_feature_engineering
             source: WORKSPACE
             base_parameters:
-              analysis_id: all
+              analysis_id: analysis_4
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: model_prediction
           depends_on:
@@ -478,8 +486,9 @@ resources:
             notebook_path: ${workspace.file_path}/models/active_user_prediction/03_model_prediction
             source: WORKSPACE
             base_parameters:
-              analysis_id: all
+              analysis_id: analysis_4
               model_alias: champion
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
         - task_key: html_report
           depends_on:
@@ -488,8 +497,9 @@ resources:
             notebook_path: ${workspace.file_path}/models/active_user_prediction/04_report
             source: WORKSPACE
             base_parameters:
-              analysis_id: all
+              analysis_id: analysis_4
               model_alias: champion
+              model_catalog: ml_train
           existing_cluster_id: ${var.analysis_cluster_id}
       queue:
         enabled: true

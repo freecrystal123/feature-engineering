@@ -22,12 +22,13 @@
 
 # COMMAND ----------
 
-for _w in ["analysis_id", "model_alias", "churn_threshold"]:
+for _w in ["analysis_id", "model_alias", "model_catalog", "churn_threshold"]:
     try: dbutils.widgets.remove(_w)
     except: pass
 
 dbutils.widgets.text("analysis_id",     "analysis_4")
 dbutils.widgets.text("model_alias",     "champion")
+dbutils.widgets.text("model_catalog",   "ml_train")
 dbutils.widgets.text("churn_threshold", "0.25")
 
 # COMMAND ----------
@@ -45,6 +46,7 @@ from pyspark.sql import functions as F
 
 analysis_id     = dbutils.widgets.get("analysis_id").strip()
 model_alias     = dbutils.widgets.get("model_alias").strip()
+model_catalog   = dbutils.widgets.get("model_catalog").strip()
 churn_threshold = float(dbutils.widgets.get("churn_threshold").strip())
 
 ANALYSIS_NAME = ANALYSIS_NAMES[analysis_id]
@@ -78,7 +80,7 @@ FEATURE_COLS = [
 model = load_model(
     subject=SUBJECT_NAME,
     analysis_name=ANALYSIS_NAME,
-    catalog=WRITE_CATALOG,
+    catalog=model_catalog,
     alias=model_alias,
 )
 
