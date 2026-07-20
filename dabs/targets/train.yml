@@ -18,6 +18,8 @@ targets:
       jobs:
         evaluator_validate:
           name: "[OPS] evaluator_validate"
+          run_as:
+            service_principal_name: ${var.job_run_as_service_principal_id}
           tags:
             job_type: ops
             flow: evaluator
@@ -38,6 +40,8 @@ targets:
 
         evaluator_deploy:
           name: "[OPS] evaluator_deploy"
+          run_as:
+            service_principal_name: ${var.job_run_as_service_principal_id}
           tags:
             job_type: ops
             flow: evaluator

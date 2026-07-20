@@ -14,6 +14,9 @@ variables:
   prediction_schedule_pause_status:
     description: Pause status for prediction cadence jobs
     default: PAUSED
+  job_run_as_service_principal_id:
+    description: Service principal application ID used to run all jobs
+    default: cedc8a11-f021-4e7f-a141-5137369b51b7
 
 include:
   - dabs/targets/*.yml

@@ -2,6 +2,8 @@ resources:
   jobs:
     reference_template_training:
       name: reference_template_training
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: reference_ml_template
         cadence: each_3m
@@ -53,6 +55,8 @@ resources:
 
     reference_template_prediction:
       name: reference_template_prediction
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: reference_ml_template
         cadence: each_1d
@@ -94,6 +98,8 @@ resources:
 
     conversion_funnel_deposit_training:
       name: conversion_funnel_deposit_training
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: conversion_funnel_deposit
         cadence: each_1m
@@ -164,6 +170,8 @@ resources:
 
     conversion_funnel_deposit_prediction:
       name: conversion_funnel_deposit_prediction
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: conversion_funnel_deposit
         cadence: each_1d
@@ -224,6 +232,8 @@ resources:
 
     tw_gross_turnover_prediction_training:
       name: tw_gross_turnover_prediction_training
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: tw_gross_turnover_prediction
         cadence: each_1m
@@ -275,6 +285,8 @@ resources:
 
     tw_gross_turnover_prediction_prediction:
       name: tw_gross_turnover_prediction_prediction
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: tw_gross_turnover_prediction
         cadence: each_1d
@@ -316,6 +328,8 @@ resources:
 
     lottery_net_turnover_prediction_training:
       name: lottery_net_turnover_prediction_training
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: lottery_net_turnover_prediction
         cadence: each_1m
@@ -369,6 +383,8 @@ resources:
 
     lottery_net_turnover_prediction_prediction:
       name: lottery_net_turnover_prediction_prediction
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: lottery_net_turnover_prediction
         cadence: each_1d
@@ -411,6 +427,8 @@ resources:
 
     active_user_prediction_training:
       name: active_user_prediction_training
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: active_user_prediction
         cadence: each_1w
@@ -464,6 +482,8 @@ resources:
 
     active_user_prediction_prediction:
       name: active_user_prediction_prediction
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: active_user_prediction
         cadence: each_1d
@@ -506,6 +526,8 @@ resources:
 
     conversion_funnel_bet_training:
       name: conversion_funnel_bet_training
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: conversion_funnel_bet
         cadence: each_1m
@@ -575,6 +597,8 @@ resources:
 
     conversion_funnel_bet_prediction:
       name: conversion_funnel_bet_prediction
+      run_as:
+        service_principal_name: ${var.job_run_as_service_principal_id}
       tags:
         solution: conversion_funnel_bet
         cadence: each_1d
