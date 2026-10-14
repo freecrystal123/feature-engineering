@@ -1,5 +1,5 @@
-bundle:
-  name: falaj-machine-learning
+﻿bundle:
+  name: feature-engineering
 
 variables:
   environment:
@@ -21,3 +21,4 @@ variables:
 include:
   - dabs/targets/*.yml
   - dabs/resources/*.yml
+

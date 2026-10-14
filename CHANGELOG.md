@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this repository should be documented in this file.
 
@@ -60,7 +60,7 @@ Each release should separate changes into these categories:
 
 ### Architecture
 
-- Base Databricks Asset Bundle structure for `falaj-machine-learning`.
+- Base Databricks Asset Bundle structure for `feature-engineering`.
 - Environment targets for `dev`, `train`, and `prod`.
 - Shared MLOps helpers in `core/utils.py` and `core/uc_feature_store.py`.
 - Evaluator operational flow in `ops/evaluator`.
@@ -72,3 +72,4 @@ Each release should separate changes into these categories:
 ### Operational
 
 - Added solution jobs in `dabs/resources/jobs_solutions.yml`.
+

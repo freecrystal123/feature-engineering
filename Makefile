@@ -1,5 +1,5 @@
-APP_DIR := streamlit
-WORKSPACE_PATH := /Workspace/falaj-machine-learning/prod
+﻿APP_DIR := streamlit
+WORKSPACE_PATH := /Workspace/feature-engineering/prod
 APP_NAME := machine-learning-reports
 APP_WS_PATH := $(WORKSPACE_PATH)/files/$(APP_DIR)
 
@@ -18,3 +18,4 @@ deploy-app:
 sync-and-deploy-app:
 	$(MAKE) sync
 	$(MAKE) deploy-app
+

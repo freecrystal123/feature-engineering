@@ -1,4 +1,4 @@
-# falaj-machine-learning
+﻿# feature-engineering
 
 Databricks Asset Bundle (DAB) for MLOps on Databricks, designed for the full machine learning lifecycle: feature engineering, training, model registration, prediction, reporting, operational validation, and promotion.
 
@@ -84,7 +84,7 @@ flowchart LR
 
 Root bundle file. It defines:
 
-- the bundle name: `falaj-machine-learning`;
+- the bundle name: `feature-engineering`;
 - global variables such as `environment`, `analysis_cluster_id`, and schedule pause settings;
 - inclusion of targets and bundle resources.
 
@@ -156,7 +156,7 @@ Tables published by the project follow this convention:
 - `*_snapshot`: append-only historical table;
 - `*_current`: view of the current state from the latest approved or published run.
 
-When publishing with `publish_table()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py), the framework adds metadata such as:
+When publishing with `publish_table()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py), the framework adds metadata such as:
 
 - `run_id`
 - `run_ts`
@@ -294,27 +294,27 @@ Those responsibilities belong to the evaluator pipeline.
 
 These are the most important functions:
 
-- `publish_table()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `publish_table()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Mandatory for publishing output tables such as features and predictions. It enforces the `snapshot/current` convention, injects run metadata such as `run_id`, `run_ts`, `ref_date`, and `analysis_name`, and applies Unity Catalog primary key conventions when configured.
-- `read_current_table()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `read_current_table()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Recommended standard way to read the current published state of a table.
-- `get_feature_engineering_client()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `get_feature_engineering_client()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Standard entry point to the Databricks Feature Engineering client.
-- `create_feature_training_set()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `create_feature_training_set()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Standard repository wrapper around Databricks Feature Engineering `create_training_set`.
-- `create_training_set_from_feature_tables()` in [core/uc_feature_store.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/uc_feature_store.py)
+- `create_training_set_from_feature_tables()` in [core/uc_feature_store.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/uc_feature_store.py)
   Preferred high-level helper to build the training set from the subject feature tables. Use this instead of assembling Feature Lookups manually in each solution unless there is a very specific reason not to.
-- `log_model_with_feature_lineage()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `log_model_with_feature_lineage()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Core function for logging and registering models with Unity Catalog Feature Engineering lineage.
-- `register_model_with_uc_feature_lineage()` in [core/uc_feature_store.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/uc_feature_store.py)
+- `register_model_with_uc_feature_lineage()` in [core/uc_feature_store.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/uc_feature_store.py)
   Higher-level helper for model registration with feature lineage.
-- `create_training_set_and_register_model()` in [core/uc_feature_store.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/uc_feature_store.py)
+- `create_training_set_and_register_model()` in [core/uc_feature_store.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/uc_feature_store.py)
   One-shot helper that combines training set creation and model registration with lineage. Use it when the solution benefits from a single standardized path.
-- `build_model_name()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `build_model_name()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Mandatory for generating standard model names from `SUBJECT` and `analysis_name`.
-- `register_candidate()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `register_candidate()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Standard way to assign the candidate alias, typically `challenger`, after training.
-- `write_report_with_single_backup()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py)
+- `write_report_with_single_backup()` in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py)
   Standard way to write reports while preserving a backup of the previous version.
 
 In addition to those helpers, prediction flows should follow the repository standard and use Databricks Feature Engineering `score_batch` for inference when the solution is built on UC feature lineage, as shown in the reference template.
@@ -346,7 +346,7 @@ The typical development flow for a new solution in this repository is:
    In this repository, `dev` is the default target. On the first deploy, this command is typically used to create the user's personal development area in the Databricks dev workspace:
 
    ```text
-   /Workspace/falaj-machine-learning/dev/${workspace.current_user.userName}
+   /Workspace/feature-engineering/dev/${workspace.current_user.userName}
    ```
 
    It also creates or updates the bundle-defined resources for `dev`, including the jobs defined in `dabs/resources/jobs_solutions.yml`.
@@ -525,7 +525,7 @@ databricks bundle deploy
 In this repository, `dev` is the default target. This means the deploy goes to the user's personal folder in the Databricks dev workspace:
 
 ```text
-/Workspace/falaj-machine-learning/dev/${workspace.current_user.userName}
+/Workspace/feature-engineering/dev/${workspace.current_user.userName}
 ```
 
 In other words, each user deploys to their own workspace path in the `dev` environment.
@@ -578,7 +578,7 @@ The `.py` files in this repository are Databricks notebooks exported into Git. T
 
 ### Cross-catalog model deployment has a specific rule
 
-The deploy logic in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/falaj-machine-learning/core/utils.py) makes it explicit that, in the current architecture, cross-catalog model deployment is disabled. The main promotion happens through alias management on the source model, while tables and reports may be promoted separately.
+The deploy logic in [core/utils.py](/Users/angelo-neto/Documents/Code/Zetta/feature-engineering/core/utils.py) makes it explicit that, in the current architecture, cross-catalog model deployment is disabled. The main promotion happens through alias management on the source model, while tables and reports may be promoted separately.
 
 In other words, production model governance depends on the defined operational flow, not on blindly copying artifacts between catalogs.
 
@@ -608,7 +608,7 @@ Before considering a new solution ready, confirm that:
 
 ## Summary
 
-This repository is the MLOps framework for the `falaj-machine-learning` project on Databricks.
+This repository is the MLOps framework for the `feature-engineering` project on Databricks.
 
 It is not just a set of notebooks: it defines a complete operational architecture to develop, publish, register, validate, promote, and operate machine learning solutions with a consistent standard.
 
@@ -621,3 +621,4 @@ If you are creating a new solution, the rule is simple:
    training and prediction.
 
 Following this pattern keeps the new solution compatible with the MLOps standard adopted by the repository.
+

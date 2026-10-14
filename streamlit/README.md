@@ -1,4 +1,4 @@
-# ML Reports App
+﻿# ML Reports App
 
 Unified Databricks App for report browsing in two environments:
 
@@ -51,6 +51,7 @@ GRANT READ VOLUME ON CATALOG ml_prod TO `<app-service-principal-id>`;
 ## Deploy
 
 1. Sync source code:
-   - `databricks sync --watch . /Workspace/Users/<user>/falaj-machine-learning/streamlit`
+   - `databricks sync --watch . /Workspace/Users/<user>/feature-engineering/streamlit`
 2. Deploy app:
-   - `databricks apps deploy machine-learning-reports --source-code-path /Workspace/Users/<user>/falaj-machine-learning/streamlit`
+   - `databricks apps deploy machine-learning-reports --source-code-path /Workspace/Users/<user>/feature-engineering/streamlit`
+

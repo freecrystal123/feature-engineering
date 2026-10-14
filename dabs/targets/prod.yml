@@ -1,14 +1,14 @@
-targets:
+﻿targets:
   prod:
     mode: production
     presets:
       name_prefix: "[PROD_ML] "
       tags:
         deployment: prod
-        project: falaj-machine-learning (feature store)
+        project: feature-engineering (feature store)
     workspace:
       host: https://adb-1817635743983490.10.azuredatabricks.net/
-      root_path: /Workspace/falaj-machine-learning/prod
+      root_path: /Workspace/feature-engineering/prod
     variables:
       environment: prod
       analysis_cluster_id: 0417-232722-qblfgc6k
@@ -19,3 +19,4 @@ targets:
         ml_reports_catalog:
           name: machine-learning-reports
           source_code_path: ../../streamlit
+
